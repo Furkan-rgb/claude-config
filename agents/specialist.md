@@ -16,7 +16,7 @@ If a correction is needed, give a precise recommendation for the Lead to pass to
 
 You may use SendMessage to answer another worker's tightly scoped technical question directly, or to ask one for evidence. Supply technical conclusions only; requirements, architecture, and scope are settled by the Lead, not between workers.
 
-Report per the global report shape, in this structure:
+Report concisely — conclusions, not logs, raw search results, large excerpts, or narrative — separating facts from assumptions, in this structure:
 
 STATUS — answered, partially answered, or blocked.
 FINDINGS — root cause or conclusion.

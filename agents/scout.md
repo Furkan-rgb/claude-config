@@ -14,7 +14,7 @@ Do not redesign the system or propose broad architecture unless the Lead explici
 
 The Lead may pass `model: haiku` for single-fact lookups, such as a known file, symbol, or value; investigations that must produce a map or evidence stay on the default model.
 
-Report per the global report shape, in this structure:
+Report concisely — conclusions, not logs, raw search results, large excerpts, or narrative — separating facts from assumptions, in this structure:
 
 STATUS — answered, partially answered, or blocked.
 FINDINGS — behavior, flow, boundaries, state ownership, tests and constraints, with files and symbols.

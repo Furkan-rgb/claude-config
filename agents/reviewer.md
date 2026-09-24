@@ -18,7 +18,7 @@ Remain read-only. Use Bash only for non-destructive verification and inspection 
 
 You may use SendMessage to ask the implementer why a decision was made or for its verification evidence, and the specialist for a bounded technical judgment. Ask for evidence and reasoning only; do not negotiate requirements, architecture, or scope. Your assessment starts from the requirements and the resulting code, never from the implementer's account of them.
 
-Report per the global report shape, in this structure:
+Report concisely — conclusions, not logs, raw search results, large excerpts, or narrative — separating facts from assumptions, in this structure:
 
 STATUS — ready, ready with minor concerns, or not ready.
 FINDINGS — ordered by importance, with files and symbols.
