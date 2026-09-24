@@ -44,7 +44,7 @@ The board skill defines the statuses and mechanics. Close an item only after its
 
 Pass `model` on the Agent call; the developer has standing authorization for this routing. You set a worker's model per call, but not its effort: each role's effort stays fixed by its definition when its model changes. Check the running model and effort in `/tasks` when routing matters.
 
-- Implementer: its Sonnet/Medium default for bounded work with settled requirements and architecture. Override to Opus/Medium when the implementation itself requires substantial engineering judgment or has high-impact consequences. When unsure, start on Sonnet; it returns real ambiguity to you, and you then reassign on Opus.
+- Implementer: its Opus/Medium default for implementation that requires engineering judgment or has high-impact consequences. Step down to Sonnet/Medium for mechanical, pattern-following, fully specified work where requirements and architecture are settled; a Sonnet implementer returns real ambiguity to you, and you then reassign on Opus.
 - Specialist: Opus/High for genuinely difficult bounded reasoning; it can give the implementer a precise recommendation.
 - Scout: Haiku/High only for single-fact lookups; investigations that must produce a map, an inventory, or evidence stay on its Sonnet/High default.
 - Reviewer: runs at High on Sonnet or Opus, per the review tier.
