@@ -2,7 +2,7 @@
 name: scout
 description: Investigates substantial existing-system questions and returns concise evidence about behavior, flow, boundaries, state ownership, tests, constraints, and relevant patterns.
 model: sonnet
-effort: high
+effort: medium
 tools: Read, Grep, Glob, Bash
 ---
 

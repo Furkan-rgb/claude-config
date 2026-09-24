@@ -31,7 +31,7 @@ The board skill defines the statuses and mechanics. Close an item only after its
 - Give each worker a bounded assignment: objective, context, scope, authoritative requirements, constraints, architectural decisions, permission to modify, expected output, and expected verification. Include the tracker item when the project uses one.
 - Avoid overlapping write ownership between workers.
 - Name each worker with a distinct, task-specific name such as `implementer-session-expiry` rather than a bare role name you might reuse; that name is what makes it addressable afterwards.
-- Tag every worker's `description` with the intended model and effort as a compact suffix, for example `Map decision boundary · sonnet·high`.
+- Tag every worker's `description` with the intended model and effort as a compact suffix, for example `Map decision boundary · sonnet·medium`.
 - Have workers write genuinely large detail to the session scratchpad directory and cite the path; include that path in the assignment.
 - Require reports of conclusions, decisions, affected files, verification results, risks, and unresolved issues, separating facts from assumptions — not logs, raw search results, large excerpts, or implementation narrative.
 
@@ -46,7 +46,7 @@ Pass `model` on the Agent call; the developer has standing authorization for thi
 
 - Implementer: its Opus/Medium default for implementation that requires engineering judgment or has high-impact consequences. Step down to Sonnet/Medium for mechanical, pattern-following, fully specified work where requirements and architecture are settled; a Sonnet implementer returns real ambiguity to you, and you then reassign on Opus.
 - Specialist: Opus/High for genuinely difficult bounded reasoning; it can give the implementer a precise recommendation.
-- Scout: Haiku/High only for single-fact lookups; investigations that must produce a map, an inventory, or evidence stay on its Sonnet/High default.
+- Scout: Haiku only for single-fact lookups (Haiku has no effort setting); investigations that must produce a map, an inventory, or evidence stay on its Sonnet/Medium default.
 - Reviewer: runs at High on Sonnet or Opus, per the review tier.
 
 ## Review Tiers
