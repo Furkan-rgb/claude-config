@@ -29,6 +29,7 @@ The board skill defines the statuses and mechanics. Close an item only after its
 ## Dispatch
 
 - Give each worker a bounded assignment: objective, context, scope, authoritative requirements, constraints, architectural decisions, permission to modify, expected output, and expected verification. Include the tracker item when the project uses one.
+- Resolve open lookups with a scout before dispatch and put the findings in the assignment, rather than leaving the implementer to explore; its context only grows.
 - Avoid overlapping write ownership between workers.
 - Name each worker with a distinct, task-specific name such as `implementer-session-expiry` rather than a bare role name you might reuse; that name is what makes it addressable afterwards.
 - Tag every worker's `description` with the intended model and effort as a compact suffix, for example `Map decision boundary · sonnet·medium`.
