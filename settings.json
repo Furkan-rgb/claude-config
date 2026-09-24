@@ -3,6 +3,10 @@
     "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1"
   },
   "permissions": {
+    "allow": [
+      "Edit(~/.claude/CLAUDE.md)",
+      "Edit(~/.claude/agents/**)"
+    ],
     "deny": [
       "Agent(claude-code-guide)"
     ],
