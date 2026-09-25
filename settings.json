@@ -202,29 +202,26 @@
   "agentPushNotifEnabled": true,
   "autoMode": {
     "environment": [
-      "### Org-wide",
-      "**Organization**: None configured",
-      "**Cloud provider(s)**: None configured",
+      "**Organization**: None — a solo developer working on personal projects on their own machine",
+      "**Primary use of Claude Code**: software development, with multi-agent orchestration (an orchestrator dispatching implementer, scout, reviewer and specialist subagents)",
+      "**Trusted repo**: The git repository the agent started in and its configured remote(s), plus any other repository under ~/Documents whose origin is github.com/Furkan-rgb",
+      "**Source control**: GitHub account Furkan-rgb, owned solely by the user; no collaborators and no required human review. All github.com/Furkan-rgb repositories and their issues and project boards are the user's own",
+      "**Default / protected branches**: `main` is the default branch; there is no branch protection and no review process — agents landing verified work on `main` is the normal workflow",
+      "**Agent worktrees and branches**: worktrees under `<repo>/.claude/worktrees/` and branches named `worktree-agent-*`, `wip/*`, `wip-*`, `codex/*` or `feat/*` are created by agents of this workflow for their own work",
+      "**Task tracking**: agents track work in GitHub Issues and GitHub Projects on Furkan-rgb repositories, or in a local board file in the repo — creating, commenting on, labelling, moving and closing those items is the tracker's intended use",
       "**Repository visibility**: assume private unless the remote host and repo name indicate otherwise, or a visibility check in the transcript shows public",
-      "**Internal sharing / snippet hosting**: None configured — treat public paste/gist services as outside the trust boundary",
+      "**Cloud provider(s)**: None configured",
+      "**CI/CD deploy targets**: None — no production deployments",
       "**Secrets management**: None configured",
-      "**Default / protected branches**: determine from the current repository before making a branch-sensitive decision",
-      "**CI/CD deploy targets**: determine from the current repository before deployment",
-      "**Network posture**: determine from the current environment before network-sensitive work",
-      "**Source control**: scope actions to the current repository and verify its remotes before interacting with them",
       "**Trusted internal domains**: None configured",
-      "**Trusted cloud buckets**: None configured",
-      "**Key internal services**: None configured",
-      "**Internal package registry**: None configured",
-      "**Sensitive data locations & audiences**: any file or store holding personal data, confidential business data, credentials, regulated data, or similarly sensitive material; preserve exact handles when known and share only with audiences cleared at the [named+specifics] bar",
-      "**Data retention / declassification**: None configured",
-      "**Sensitive remote targets**: any namespace, host, or container whose name carries `prod` or `production` as a whole word or name segment (hyphen/underscore/dot-delimited — e.g. matches `prod-db`, not `producer`)",
-      "**Protected deployment namespaces / environments**: None configured — fall back to the Sensitive remote targets heuristic",
-      "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries `prod` or `production` as a whole word or name segment",
-      "### User-specific",
-      "**Primary use of Claude Code**: software development",
-      "**Trusted repo**: None configured globally; determine repository trust and remote scope from the current project",
-      "**Org-specific CLIs**: None configured"
+      "**Sensitive data locations & audiences**: any file or store holding personal data, credentials, or similarly sensitive material"
+    ],
+    "allow": [
+      "$defaults",
+      "Solo Landing: Pushing, fast-forwarding or merging an agent branch or commit into `main` of a github.com/Furkan-rgb repository — including `git push origin <branch>:main` or `<sha>:main` — is the user's normal landing workflow, not Merge Without Review or Modify Shared Resources: there are no other reviewers. A plain force push to `main` is still Git Destructive.",
+      "Agent Branch Upkeep: `git push --force-with-lease` to, and deleting (locally or on the remote), an agent branch (`worktree-agent-*`, `wip/*`, `wip-*`, `codex/*`, `feat/*`) of a Furkan-rgb repository is routine cleanup of agent work, not Git Destructive.",
+      "Agent Worktree Upkeep: `git stash push`, `git reset`, `git checkout`, `git clean` and `git worktree remove [--force]` targeting a worktree under `<repo>/.claude/worktrees/` are routine agent housekeeping, not Irreversible Local Destruction. `git stash drop`/`clear` is still evaluated normally.",
+      "Own Task Tracker: Creating, commenting on, labelling, closing and reopening GitHub issues, and adding or moving GitHub Project items, on Furkan-rgb repositories is task tracking in the user's own tracker, not External System Writes."
     ]
   }
 }
