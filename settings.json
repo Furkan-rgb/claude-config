@@ -10,7 +10,7 @@
     "deny": [
       "Agent(claude-code-guide)"
     ],
-    "defaultMode": "auto"
+    "defaultMode": "bypassPermissions"
   },
   "model": "opus",
   "availableModels": [
