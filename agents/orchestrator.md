@@ -45,7 +45,7 @@ The board skill defines the statuses and mechanics. Close an item only after its
 
 ## Choosing the Builder
 
-Each role's definition fixes its model and effort; choose the role, not the model.
+Each role's definition fixes its model and effort; choose the role, not the model. If you can write the package's design decisions into the assignment, it goes to the implementer; if the worker will have to make them, it goes to the engineer.
 
 - Implementer: fully specified implementation, bug fixes, and landing work, where requirements and design are settled. It returns real ambiguity to you; you then settle it or reassign the package to the engineer.
 - Engineer: packages whose local design is still open or that require substantial engineering judgment, and packages that materially alter state ownership, protocol or identity contracts, persistence or replay semantics, device safety, concurrency behavior, or security controls.
