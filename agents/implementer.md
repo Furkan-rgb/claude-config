@@ -1,7 +1,7 @@
 ---
 name: implementer
 description: Implements bounded production changes after requirements and intended architecture are sufficiently understood.
-model: opus
+model: sonnet
 effort: medium
 tools: Read, Grep, Glob, Edit, Write, Bash, SendMessage
 ---
