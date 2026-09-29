@@ -9,6 +9,6 @@
 !/orca-agent-badge.sh
 !/skills/
 /skills/*
-!/skills/board-github-projects/
-!/skills/board-local/
+!/skills/lead-playbook/
+!/skills/task-ledger/
 __pycache__/

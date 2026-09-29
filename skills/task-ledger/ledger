@@ -1,0 +1,441 @@
+#!/usr/bin/env python3
+"""task-ledger: one command set for a project's task board, whatever the backend.
+
+The project chooses its backend once, in `.ledger/config.json` at the project root:
+
+    {"backend": "local"}
+    {"backend": "github", "owner": "<login>", "project": <N>, "repo": "<owner>/<repo>"}
+
+Items are addressed by number: the local id, or the GitHub issue number. A GitHub card with no
+issue behind it (a draft) is addressed as `draft:<item id>` and becomes an issue when it moves to
+In progress, because commits cite issue numbers.
+"""
+import argparse
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+STATUSES = ["Backlog", "Next", "In progress", "Blocked", "Done"]
+OPEN_ORDER = {"in progress": 0, "next": 1, "blocked": 2, "backlog": 3}
+BRIEF_STATUSES = ("in progress", "next", "blocked")
+RECONCILE = "Board: update any item you start, finish, block, or learn something about in this turn."
+CACHE_SECONDS = 60
+
+
+class LedgerError(Exception):
+    pass
+
+
+def canonical_status(name):
+    for s in STATUSES:
+        if s.lower() == name.strip().lower():
+            return s
+    raise LedgerError(f"unknown status {name!r}; use one of: {', '.join(STATUSES)}")
+
+
+def project_root():
+    env = os.environ.get("CLAUDE_PROJECT_DIR")
+    start = Path(env) if env else Path.cwd()
+    for d in [start, *start.parents]:
+        if (d / ".ledger" / "config.json").is_file():
+            return d
+    return None
+
+
+def private_dir():
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    d = Path(base) / "task-ledger" if base and os.path.isdir(base) else Path.home() / ".cache" / "task-ledger"
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return d
+
+
+# ── local backend ────────────────────────────────────────────────────────────────────────────
+
+class LocalBackend:
+    def __init__(self, root, config):
+        self.path = root / ".ledger" / "ledger.json"
+
+    def _load(self):
+        if not self.path.is_file():
+            raise LedgerError(f"{self.path} missing; run `ledger init local`")
+        return json.loads(self.path.read_text())
+
+    def _save(self, data):
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2) + "\n")
+        tmp.replace(self.path)
+
+    def _find(self, data, ref):
+        for it in data["items"]:
+            if str(it["id"]) == str(ref).lstrip("#"):
+                return it
+        raise LedgerError(f"no item #{ref}")
+
+    def items(self):
+        return [{"ref": str(it["id"]), "number": it["id"], "title": it["title"], "status": it["status"]}
+                for it in self._load()["items"]]
+
+    def show(self, ref):
+        return self._find(self._load(), ref)
+
+    def create(self, title, body, status):
+        data = self._load()
+        item = {"id": data["next_id"], "title": title, "body": body, "status": status, "comments": []}
+        data["next_id"] += 1
+        data["items"].append(item)
+        self._save(data)
+        return str(item["id"])
+
+    def move(self, ref, status):
+        data = self._load()
+        self._find(data, ref)["status"] = status
+        self._save(data)
+        return ref
+
+    def comment(self, ref, text):
+        data = self._load()
+        self._find(data, ref)["comments"].append({"at": time.strftime("%Y-%m-%d %H:%M"), "text": text})
+        self._save(data)
+
+    def close(self, ref):
+        self.move(ref, "Done")
+
+    def status_of(self, ref):
+        return self._find(self._load(), ref)["status"]
+
+    @staticmethod
+    def init(root, args):
+        path = root / ".ledger" / "ledger.json"
+        if not path.exists():
+            path.write_text(json.dumps({"next_id": 1, "items": []}, indent=2) + "\n")
+        return {"backend": "local"}
+
+
+# ── GitHub Projects v2 backend ───────────────────────────────────────────────────────────────
+# Reads and board writes go over REST: GraphQL has its own points bucket, observed pinned for
+# hours under concurrent agent load while REST on the same token kept working. Reads share a
+# 60-second per-user cache, so the per-turn hook and a commit gate cost one API call per minute
+# rather than one each, which avoids GitHub's secondary rate limit.
+
+class GitHubBackend:
+    API = ["-H", "X-GitHub-Api-Version: 2022-11-28"]
+
+    def __init__(self, root, config):
+        try:
+            self.owner, self.number, self.repo = config["owner"], int(config["project"]), config["repo"]
+        except KeyError as e:
+            raise LedgerError(f".ledger/config.json lacks {e}")
+        self.kind = config.get("owner_type", "users")
+        self.base = f"/{self.kind}/{self.owner}/projectsV2/{self.number}"
+        self.cache = private_dir() / f"github-{self.owner}-{self.number}.json"
+
+    def _gh(self, *args, timeout=20):
+        r = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout)
+        if r.returncode != 0:
+            raise LedgerError(f"gh {' '.join(args[:3])}: {r.stderr.strip() or r.stdout.strip()}")
+        return r.stdout
+
+    def _api(self, path, *extra, paginate=False):
+        args = ["api", path, *self.API, *extra] + (["--paginate"] if paginate else [])
+        out = self._gh(*args)
+        if paginate:  # --paginate concatenates one JSON array per page
+            dec, pos, merged = json.JSONDecoder(), 0, []
+            out = out.strip()
+            while pos < len(out):
+                chunk, pos = dec.raw_decode(out, pos)
+                merged.extend(chunk)
+                while pos < len(out) and out[pos].isspace():
+                    pos += 1
+            return merged
+        return json.loads(out) if out.strip() else None
+
+    def _fetch(self):
+        fields = self._api(f"{self.base}/fields", paginate=True)
+        status = next((f for f in fields if f.get("name") == "Status"), None)
+        if not status:
+            raise LedgerError("project has no Status field")
+        raw = self._api(f"{self.base}/items?fields[]={status['id']}&per_page=100", paginate=True)
+        items = []
+        for it in raw:
+            content = it.get("content") or {}
+            value = next((f.get("value") for f in it.get("fields", []) if f.get("name") == "Status"), None)
+            items.append({
+                "status": (value or {}).get("name", {}).get("raw") if value else None,
+                "content": {"number": content.get("number"), "title": content.get("title")} if content else None,
+                "title": content.get("title") or it.get("title"),
+                "project_item_id": it["id"],
+                "node_id": it.get("node_id"),
+            })
+        return {"status_field_id": status["id"], "status_options": status.get("options", []), "items": items}
+
+    def board(self, force=False):
+        """The board JSON and whether it is fresh. Falls back to the last good copy when a
+        refresh fails, and says so: a stale copy can be trusted for a status, not an absence."""
+        if not force and self.cache.is_file() and time.time() - self.cache.stat().st_mtime < CACHE_SECONDS:
+            return json.loads(self.cache.read_text()), True
+        try:
+            data = self._fetch()
+        except (LedgerError, subprocess.TimeoutExpired, FileNotFoundError, ValueError) as e:
+            if self.cache.is_file():
+                return json.loads(self.cache.read_text()), False
+            raise LedgerError(f"board unreachable: {e}")
+        tmp = self.cache.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(self.cache)
+        return data, True
+
+    def items(self):
+        out = []
+        for it in self.board()[0]["items"]:
+            n = (it.get("content") or {}).get("number")
+            ref = str(n) if n is not None else f"draft:{it['project_item_id']}"
+            out.append({"ref": ref, "number": n, "title": it.get("title") or "", "status": it.get("status") or "Backlog"})
+        return out
+
+    def _item(self, ref, board=None):
+        board = board or self.board()[0]
+        ref = str(ref).lstrip("#")
+        for it in board["items"]:
+            n = (it.get("content") or {}).get("number")
+            if (ref.startswith("draft:") and ref[6:] == str(it["project_item_id"])) or str(n) == ref:
+                return it
+        raise LedgerError(f"no item {ref} on project #{self.number}")
+
+    def _option_id(self, board, status):
+        for o in board["status_options"]:
+            name = o.get("name", {})
+            name = name.get("raw") if isinstance(name, dict) else name
+            if (name or "").lower() == status.lower():
+                return o["id"]
+        raise LedgerError(f"project #{self.number} has no Status option {status!r}")
+
+    def show(self, ref):
+        item = self._item(ref)
+        n = (item.get("content") or {}).get("number")
+        if n is None:
+            return {"ref": ref, "title": item.get("title"), "status": item.get("status"), "body": "(draft)"}
+        issue = json.loads(self._gh("issue", "view", str(n), "--repo", self.repo,
+                                    "--json", "number,title,body,state,comments"))
+        return {"ref": str(n), "title": issue["title"], "status": item.get("status"), "state": issue["state"],
+                "body": issue["body"], "comments": [{"at": c["createdAt"], "text": c["body"]} for c in issue["comments"]]}
+
+    def create(self, title, body, status):
+        url = self._gh("issue", "create", "--repo", self.repo, "--title", title, "--body", body or " ").strip()
+        n = url.rstrip("/").rsplit("/", 1)[-1]
+        db_id = self._api(f"repos/{self.repo}/issues/{n}")["id"]
+        added = self._api(f"{self.base}/items", "-X", "POST", "-f", "type=Issue", "-F", f"id={db_id}")
+        board = self.board(force=True)[0]
+        self._set_status(board, added["id"], status)
+        return n
+
+    def _set_status(self, board, item_id, status):
+        self._api(f"{self.base}/items/{item_id}", "-X", "PATCH",
+                  "-F", f"fields[][id]={board['status_field_id']}",
+                  "-f", f"fields[][value]={self._option_id(board, status)}")
+
+    def _convert_draft(self, item):
+        repo_id = json.loads(self._gh("repo", "view", self.repo, "--json", "id"))["id"]
+        q = ("mutation($item:ID!,$repo:ID!){convertProjectV2DraftIssueItemToIssue("
+             "input:{itemId:$item,repositoryId:$repo}){item{content{... on Issue{number}}}}}")
+        out = json.loads(self._gh("api", "graphql", "-f", f"query={q}",
+                                  "-f", f"item={item['node_id']}", "-f", f"repo={repo_id}"))
+        return str(out["data"]["convertProjectV2DraftIssueItemToIssue"]["item"]["content"]["number"])
+
+    def move(self, ref, status):
+        board = self.board(force=True)[0]
+        item = self._item(ref, board)
+        if (item.get("content") or {}).get("number") is None and status == "In progress":
+            ref = self._convert_draft(item)
+        self._set_status(board, item["project_item_id"], status)
+        return ref
+
+    def comment(self, ref, text):
+        self._gh("issue", "comment", str(ref).lstrip("#"), "--repo", self.repo, "--body", text)
+
+    def close(self, ref):
+        self.move(ref, "Done")
+        self._gh("issue", "close", str(ref).lstrip("#"), "--repo", self.repo)
+
+    def status_of(self, ref):
+        """Read back from a fresh single-item GET: the list endpoint lags right after a write."""
+        item = self._item(ref, self.board(force=True)[0])
+        board = json.loads(self.cache.read_text())
+        got = self._api(f"{self.base}/items/{item['project_item_id']}?fields[]={board['status_field_id']}")
+        value = next((f.get("value") for f in got.get("fields", []) if f.get("name") == "Status"), None)
+        return (value or {}).get("name", {}).get("raw")
+
+    @staticmethod
+    def init(root, args):
+        if not (args.owner and args.project and args.repo):
+            raise LedgerError("init github needs --owner, --project and --repo")
+        config = {"backend": "github", "owner": args.owner, "project": int(args.project), "repo": args.repo}
+        board = GitHubBackend(root, config).board(force=True)[0]
+        names = {(o.get("name", {}).get("raw") if isinstance(o.get("name"), dict) else o.get("name") or "").lower()
+                 for o in board["status_options"]}
+        missing = [s for s in STATUSES if s.lower() not in names]
+        if missing:
+            raise LedgerError(f"project #{args.project} Status lacks options: {', '.join(missing)}")
+        return config
+
+
+BACKENDS = {"local": LocalBackend, "github": GitHubBackend}
+
+
+def open_backend():
+    root = project_root()
+    if root is None:
+        raise LedgerError("no .ledger/config.json in this project; run `ledger init`")
+    config = json.loads((root / ".ledger" / "config.json").read_text())
+    cls = BACKENDS.get(config.get("backend"))
+    if cls is None:
+        raise LedgerError(f"unknown backend {config.get('backend')!r}")
+    return cls(root, config)
+
+
+# ── commands ─────────────────────────────────────────────────────────────────────────────────
+
+def line(it):
+    ref = f"#{it['ref']}" if not it["ref"].startswith("draft:") else it["ref"]
+    return f"{ref} [{it['status']}] {it['title']}"
+
+
+def open_items(items):
+    rows = [it for it in items if (it["status"] or "").lower() in OPEN_ORDER]
+    return sorted(rows, key=lambda it: OPEN_ORDER[it["status"].lower()])
+
+
+def cmd_list(b, a):
+    items = b.items()
+    rows = items if a.all else open_items(items)
+    if a.json:
+        print(json.dumps(rows, indent=2))
+        return
+    for it in rows[:a.limit]:
+        print(line(it))
+    if len(rows) > a.limit:
+        print(f"...and {len(rows) - a.limit} more")
+
+
+def cmd_show(b, a):
+    print(json.dumps(b.show(a.ref), indent=2))
+
+
+def cmd_create(b, a):
+    ref = b.create(a.title, a.body or "", canonical_status(a.status))
+    print(f"#{ref} [{b.status_of(ref)}] {a.title}")
+
+
+def cmd_move(b, a):
+    ref = b.move(a.ref, canonical_status(a.status))
+    print(f"#{str(ref).lstrip('#')} now {b.status_of(ref)}")
+
+
+def cmd_comment(b, a):
+    b.comment(a.ref, a.text)
+    print(f"commented on #{a.ref.lstrip('#')}")
+
+
+def cmd_close(b, a):
+    if a.text:
+        b.comment(a.ref, a.text)
+    b.close(a.ref)
+    print(f"#{a.ref.lstrip('#')} now {b.status_of(a.ref)}")
+
+
+def cmd_board_json(b, a):
+    """The raw GitHub board for commit gates: exit 0 fresh, 3 stale but usable, 1 nothing."""
+    if not isinstance(b, GitHubBackend):
+        print(json.dumps({"items": [{"status": it["status"], "content": {"number": it["number"], "title": it["title"]},
+                                     "title": it["title"]} for it in b.items()]}))
+        return 0
+    data, fresh = b.board(force=a.force)
+    print(json.dumps(data))
+    return 0 if fresh else 3
+
+
+def cmd_brief(b, a):
+    """For hooks. Full brief at session start, resume and compaction; on each prompt only what
+    changed since the last brief this session, and nothing when nothing did."""
+    rows = [it for it in b.items() if (it["status"] or "").lower() in BRIEF_STATUSES]
+    rows.sort(key=lambda it: OPEN_ORDER[it["status"].lower()])
+    snapshot = {it["ref"]: f"{it['status']}|{it['title']}" for it in rows}
+    try:
+        hook = json.loads(sys.stdin.read() or "{}") if not sys.stdin.isatty() else {}
+    except ValueError:
+        hook = {}
+    session = hook.get("session_id") or "nosession"
+    state = private_dir() / f"brief-{hashlib.sha1(str(project_root()).encode()).hexdigest()[:12]}-{session}.json"
+    previous = json.loads(state.read_text()) if a.changes and state.is_file() else None
+    state.write_text(json.dumps(snapshot))
+    if previous is None:
+        if rows:
+            print("Board (open items):")
+            for it in rows:
+                if it["status"].lower() != "blocked":
+                    print(line(it))
+            blocked = sum(1 for it in rows if it["status"].lower() == "blocked")
+            if blocked:
+                print(f"+{blocked} Blocked (`ledger list` shows them)")
+            print(RECONCILE)
+        return
+    changed = [line(it) for it in rows if previous.get(it["ref"]) != snapshot[it["ref"]]]
+    gone = [ref for ref in previous if ref not in snapshot]
+    if changed or gone:
+        print("Board changes since the last brief:")
+        for l in changed:
+            print(l)
+        for ref in gone:
+            print(f"#{ref} left the open columns")
+
+
+def cmd_init(a):
+    root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path.cwd())
+    (root / ".ledger").mkdir(exist_ok=True)
+    config = BACKENDS[a.backend].init(root, a)
+    (root / ".ledger" / "config.json").write_text(json.dumps(config, indent=2) + "\n")
+    print(f"ledger: {a.backend} backend configured in {root / '.ledger' / 'config.json'}")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="ledger", description=__doc__.split("\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("list"); s.add_argument("--all", action="store_true"); s.add_argument("--json", action="store_true")
+    s.add_argument("--limit", type=int, default=20)
+    s = sub.add_parser("show"); s.add_argument("ref")
+    s = sub.add_parser("create"); s.add_argument("--title", required=True); s.add_argument("--body")
+    s.add_argument("--status", default="Backlog")
+    s = sub.add_parser("move"); s.add_argument("ref"); s.add_argument("status")
+    s = sub.add_parser("comment"); s.add_argument("ref"); s.add_argument("--text", required=True)
+    s = sub.add_parser("close"); s.add_argument("ref"); s.add_argument("--text")
+    s = sub.add_parser("brief"); s.add_argument("--changes", action="store_true")
+    s = sub.add_parser("board-json"); s.add_argument("--force", action="store_true")
+    s = sub.add_parser("init"); s.add_argument("backend", choices=sorted(BACKENDS))
+    s.add_argument("--owner"); s.add_argument("--project"); s.add_argument("--repo")
+    a = p.parse_args()
+
+    if a.cmd == "brief":  # a hook must never fail the turn
+        try:
+            cmd_brief(open_backend(), a)
+        except Exception:
+            pass
+        return 0
+    try:
+        if a.cmd == "init":
+            cmd_init(a)
+            return 0
+        rc = globals()[f"cmd_{a.cmd.replace('-', '_')}"](open_backend(), a)
+        return rc or 0
+    except LedgerError as e:
+        print(f"ledger: {e}", file=sys.stderr)
+        return 1
+    except subprocess.TimeoutExpired:
+        print("ledger: GitHub did not answer in time", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
