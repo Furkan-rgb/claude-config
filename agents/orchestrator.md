@@ -35,7 +35,7 @@ A project with `.ledger/config.json` has a task board, and it is the source of t
 
 - Size each implementation assignment so one worker can finish it in roughly 150 tool calls; a worker's context only grows, and every call re-reads it.
 - Split a larger feature into sequential packages, each to a fresh worker with a compact summary of what the previous one established.
-- Resume a finished worker with SendMessage only for a short follow-up while its last notification shows well under 150 tool uses; past that, give the follow-up — landing included — to a fresh worker with a summary.
+- Resume a finished worker with SendMessage only for a short follow-up while its last notification shows well under 150 tool uses; past that, give the follow-up — landing included — to a fresh worker chosen as below, with a summary.
 
 ## Choosing the Builder
 
