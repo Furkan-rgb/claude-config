@@ -261,12 +261,31 @@ class GitHubBackend:
         self._gh("issue", "close", str(ref).lstrip("#"), "--repo", self.repo)
 
     def status_of(self, ref):
-        """Read back from a fresh single-item GET: the list endpoint lags right after a write."""
-        item = self._item(ref, self.board(force=True)[0])
-        board = json.loads(self.cache.read_text())
-        got = self._api(f"{self.base}/items/{item['project_item_id']}?fields[]={board['status_field_id']}")
-        value = next((f.get("value") for f in got.get("fields", []) if f.get("name") == "Status"), None)
-        return (value or {}).get("name", {}).get("raw")
+        """An item's status straight from GitHub, or None when it is not on this project. Measured
+        2026-09-24: the REST list endpoint can lag a write by minutes, while a direct lookup by
+        issue number stayed fresh, so read-backs and commit gates ask this rather than the list."""
+        ref = str(ref).lstrip("#")
+        if ref.startswith("draft:"):
+            board = self.board()[0]
+            got = self._api(f"{self.base}/items/{ref[6:]}?fields[]={board['status_field_id']}")
+            value = next((f.get("value") for f in got.get("fields", []) if f.get("name") == "Status"), None)
+            return (value or {}).get("name", {}).get("raw")
+        owner, name = self.repo.split("/", 1)
+        q = ("query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){"
+             "issue(number:$number){projectItems(first:20){nodes{project{number} "
+             "fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}")
+        try:
+            out = json.loads(self._gh("api", "graphql", "-f", f"query={q}", "-f", f"owner={owner}",
+                                      "-f", f"repo={name}", "-F", f"number={ref}", timeout=10))
+        except LedgerError as e:
+            if "Could not resolve to an Issue" in str(e):
+                return None
+            raise
+        issue = ((out.get("data") or {}).get("repository") or {}).get("issue") or {}
+        for node in (issue.get("projectItems") or {}).get("nodes", []):
+            if node["project"]["number"] == self.number:
+                return (node.get("fieldValueByName") or {}).get("name")
+        return None
 
     @staticmethod
     def init(root, args):
@@ -346,6 +365,23 @@ def cmd_close(b, a):
     print(f"#{a.ref.lstrip('#')} now {b.status_of(a.ref)}")
 
 
+def cmd_status(b, a):
+    """For commit gates: the item's current status, or nothing when it is not on the board.
+    Exit 0 when answered, 2 when the lookup itself failed."""
+    try:
+        status = b.status_of(a.ref)
+    except LedgerError as e:
+        if isinstance(b, LocalBackend):
+            return 0
+        print(f"ledger: {e}", file=sys.stderr)
+        return 2
+    except (subprocess.TimeoutExpired, ValueError):
+        return 2
+    if status:
+        print(status)
+    return 0
+
+
 def cmd_board_json(b, a):
     """The raw GitHub board for commit gates: exit 0 fresh, 3 stale but usable, 1 nothing."""
     if not isinstance(b, GitHubBackend):
@@ -412,6 +448,7 @@ def main():
     s = sub.add_parser("comment"); s.add_argument("ref"); s.add_argument("--text", required=True)
     s = sub.add_parser("close"); s.add_argument("ref"); s.add_argument("--text")
     s = sub.add_parser("brief"); s.add_argument("--changes", action="store_true")
+    s = sub.add_parser("status"); s.add_argument("ref")
     s = sub.add_parser("board-json"); s.add_argument("--force", action="store_true")
     s = sub.add_parser("init"); s.add_argument("backend", choices=sorted(BACKENDS))
     s.add_argument("--owner"); s.add_argument("--project"); s.add_argument("--repo")
