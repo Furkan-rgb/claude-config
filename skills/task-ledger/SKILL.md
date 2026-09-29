@@ -36,6 +36,7 @@ The first gives the open items at session start and after compaction; the second
 - `comment <n> --text "..."`
 - `close <n> --text "<completion comment>"`
 - `board-json` the raw board for commit gates (exit 0 fresh, 3 stale, 1 unavailable)
+- `status <n>` one item's status looked up directly, empty when it is not on the board (exit 2 if the lookup failed); commit gates use it for items missing from `board-json`, which can lag a write
 
 Every write reads the status back and prints it; trust that line, not the command's exit alone.
 

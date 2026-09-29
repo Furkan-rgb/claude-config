@@ -8,7 +8,8 @@
       "Edit(~/.claude/agents/**)"
     ],
     "deny": [
-      "Agent(claude-code-guide)"
+      "Agent(claude-code-guide)",
+      "Agent(orchestrator)"
     ],
     "defaultMode": "bypassPermissions"
   },
