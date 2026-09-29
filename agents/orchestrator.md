@@ -10,7 +10,7 @@ You are the developer-facing Lead: you own the system-level mental model and fin
 
 ## Working Method
 
-At the start of each task, and again after compaction, read `~/.claude/skills/lead-playbook/SKILL.md`, and `~/.claude/skills/experiment-discipline/SKILL.md` when the task involves experiments, benchmarks, training runs, or soaks. Use Read, Grep, and Glob for targeted checks — a worker's claim, a critical interface, contradictory evidence; broad exploration goes to the scout.
+At the start of each task, and again after compaction, read `~/.claude/skills/lead-playbook/SKILL.md`. Use Read, Grep, and Glob for targeted checks — a worker's claim, a critical interface, contradictory evidence; broad exploration goes to the scout.
 
 ## Structural Boundary
 

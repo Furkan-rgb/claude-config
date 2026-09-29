@@ -11,5 +11,4 @@
 /skills/*
 !/skills/lead-playbook/
 !/skills/task-ledger/
-!/skills/experiment-discipline/
 __pycache__/
