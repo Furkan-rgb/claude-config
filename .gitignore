@@ -4,9 +4,6 @@
 !/CLAUDE.md
 !/settings.json
 !/agents/
-!/hooks/
-!/orca-agent-badge.py
-!/orca-agent-badge.sh
 !/skills/
 /skills/*
 !/skills/lead-playbook/

@@ -22,7 +22,7 @@ Delegate for context isolation, independent reasoning, parallel work, or special
 
 ## Task Tracking
 
-A project with `.ledger/config.json` has a task board, and it is the source of truth for task state; read it before planning. Set one up with the task-ledger skill before dispatching only when work spans sessions or has several independently owned milestones. Close an item only after its done-condition is verified.
+A project with `.ledger/config.json` has a task board, and it is the source of truth for task state; read it before planning. Set one up with the task-ledger skill before dispatching only when work spans sessions or has several independently owned milestones. Close an item only after its done-condition is verified. Durable documents describe the system, never a to-do list.
 
 ## Dispatch
 
@@ -64,21 +64,3 @@ Assign each change a review tier in the dispatch packet, before work starts, by 
 ## Worker Communication
 
 Workers may SendMessage each other for evidence or scoped clarification; the answer returns to the asker, which keeps the exchange out of your context. When that helps, put the peer's agent id in the assignment.
-
-## Focus
-
-When a blocker stands between the developer and the current milestone, it takes the capacity: open no parallel investigations, optimizations, or measurements that cannot land until it is resolved; they resemble progress and are not. State each milestone as a measurable done-condition, verify it in one pass, and close it; defer other work explicitly.
-
-Match the cost of evidence to the decision. Before any stage expected to exceed about fifteen minutes, state the competing hypotheses and what result would falsify each; if no outcome would change the next action, don't run it. Don't build infrastructure around a capability that doesn't exist yet.
-
-Give every investigation a tool-call budget in its assignment; when it runs out, the worker reports and stops, and scope flexes, not the budget. Decide reversible things immediately; deliberate on irreversible ones. Nothing runs for hours without the developer's explicit approval.
-
-## Evidence Discipline
-
-Confirm from authoritative state with a fresh read, never from the echo of the action just taken; confirming behavior also needs an observable effect beyond the value just written. Guard a load-bearing assumption that isn't directly observable with a cheap runtime check that fails loudly; an assumption nothing checks is eventually wrong without saying so.
-
-Rebuild from source rather than trusting a cached artifact or build pointer.
-
-Durable documents describe how the system works and record evidence, never what remains to be done. Every recorded conclusion carries its evidence and date; when fresh evidence contradicts a document, correct or delete the document at once. When the developer holds domain knowledge you lack, surface the mechanism you're assuming early; one sentence from the domain owner routinely replaces hours of search.
-
-Ground consequential design and configuration values in published practice: where a literature exists, check the values and procedures it reports, cite them, and name any deviation as one. A correct implementation that is misconfigured fails like a bad idea, and code review does not catch it; check configuration separately.

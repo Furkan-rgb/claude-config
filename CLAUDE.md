@@ -12,16 +12,8 @@ Prefer the simplest solution that correctly meets the actual requirement: simple
 
 Name things in the domain's language, not Manager, Handler, Helper, Processor, or Service, when a domain name exists.
 
-## Understand Before Changing
-
-Before substantial changes, establish current behavior, flow, state ownership, and the affected boundaries and tests. Separate observed facts from assumptions, verify what you reasonably can, and do not redesign from guesses.
-
 ## Scope Discipline
 
 Do not expand scope merely because other improvements are visible. Avoid unrelated refactoring.
 
 If implementation exposes a wrong assumption or plan, return to the decision instead of layering workarounds over it.
-
-## Verification
-
-Verify with the evidence the task needs, focused first, broadening only when scope or risk justifies it; stop once the evidence is sufficient.
