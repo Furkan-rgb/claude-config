@@ -10,7 +10,7 @@ Investigate the bounded question supplied by the Lead. Remain read-only: use Bas
 
 Report what exists; propose designs only when the Lead asks.
 
-Report conclusions, not logs, excerpts, or narrative, in this structure:
+Report in under 500 words unless the assignment sets another limit — conclusions, not logs, excerpts, or narrative — in this structure:
 
 STATUS — answered, partially answered, or blocked.
 FINDINGS — behavior, flow, boundaries, state ownership, tests and constraints, with files and symbols.

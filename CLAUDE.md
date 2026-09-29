@@ -28,4 +28,4 @@ Verify with the evidence the task needs, focused first, broadening only when sco
 
 ## Long-Running Stages
 
-A long-running stage — a training run, a soak, a benchmark on an exclusive device — is owned by a script that runs the stage, its evaluation and its cleanup unattended and exits with a status. Do not poll a log or sleep in a loop waiting for it; start it once as a background task and let the harness's completion notification wake you.
+A long-running stage — a training run, a soak, a benchmark on an exclusive device — is owned by a script that runs the stage, its evaluation and its cleanup unattended and exits with a status. To wait on anything — your own run, another process, a lock — run the wait itself as a background command and end your turn; its completion wakes you. Never sleep in a foreground loop.
