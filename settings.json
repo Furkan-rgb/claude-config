@@ -24,11 +24,6 @@
   },
   "extraKnownMarketplaces": {},
   "effortLevel": "medium",
-  "modelSettings": {
-    "claude-opus-5-5": {
-      "effortLevel": "medium"
-    }
-  },
   "autoCompactWindow": 250000,
   "skipDangerousModePermissionPrompt": true,
   "skipWorkflowUsageWarning": true,

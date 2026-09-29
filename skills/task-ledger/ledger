@@ -343,14 +343,23 @@ def cmd_show(b, a):
     print(json.dumps(b.show(a.ref), indent=2))
 
 
+def read_back(b, ref):
+    """The status after a write. A failed read-back must not look like a failed write, or the
+    caller retries it and, for create, makes a duplicate."""
+    try:
+        return b.status_of(ref)
+    except LedgerError as e:
+        return f"written, status unconfirmed: {e}"
+
+
 def cmd_create(b, a):
     ref = b.create(a.title, a.body or "", canonical_status(a.status))
-    print(f"#{ref} [{b.status_of(ref)}] {a.title}")
+    print(f"#{ref} [{read_back(b, ref)}] {a.title}")
 
 
 def cmd_move(b, a):
     ref = b.move(a.ref, canonical_status(a.status))
-    print(f"#{str(ref).lstrip('#')} now {b.status_of(ref)}")
+    print(f"#{str(ref).lstrip('#')} now {read_back(b, ref)}")
 
 
 def cmd_comment(b, a):
@@ -362,7 +371,7 @@ def cmd_close(b, a):
     if a.text:
         b.comment(a.ref, a.text)
     b.close(a.ref)
-    print(f"#{a.ref.lstrip('#')} now {b.status_of(a.ref)}")
+    print(f"#{a.ref.lstrip('#')} now {read_back(b, a.ref)}")
 
 
 def cmd_status(b, a):
@@ -415,7 +424,7 @@ def cmd_brief(b, a):
                     print(line(it))
             blocked = sum(1 for it in rows if it["status"].lower() == "blocked")
             if blocked:
-                print(f"+{blocked} Blocked (`ledger list` shows them)")
+                print(f"+{blocked} Blocked (`ledger list --limit 100` shows them)")
             print(RECONCILE)
         return
     changed = [line(it) for it in rows if previous.get(it["ref"]) != snapshot[it["ref"]]]

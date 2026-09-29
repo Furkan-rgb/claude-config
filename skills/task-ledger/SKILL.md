@@ -14,8 +14,6 @@ A project has a board once `.ledger/config.json` exists. Run `init` from the pro
 - **Local:** `ledger init local`. The board is `.ledger/ledger.json`; commit it with the code.
 - **GitHub Projects:** the project board must exist first, with a single-select `Status` field whose options are exactly Backlog, Next, In progress, Blocked, Done (create it with `gh project create --owner <login> --title <title>` and set the options in the web UI). Then `ledger init github --owner <login> --project <number> --repo <owner>/<repo>`. Init checks that the board is reachable and that the Status options match. Needs `gh` authenticated with the `project` scope.
 
-Any other platform needs a backend added to the `ledger` script first: a class with the same methods as `LocalBackend` plus its own `init`, registered in `BACKENDS`. Do not improvise one inside a project.
-
 To get the board brief in every session, the project registers the hook in its `.claude/settings.json`:
 
 ```json
@@ -29,7 +27,7 @@ The first gives the open items at session start and after compaction; the second
 
 ## Verbs
 
-- `list [--all] [--json]` open items, In progress first; `--all` includes Done
+- `list [--all] [--json] [--limit N]` open items, In progress first, 20 rows unless `--limit`; `--all` includes Done
 - `show <n>` one item with its body and comments
 - `create --title "<done-condition>" [--body ...] [--status Next]`
 - `move <n> <status>`
@@ -38,7 +36,7 @@ The first gives the open items at session start and after compaction; the second
 - `board-json` the raw board for commit gates (exit 0 fresh, 3 stale, 1 unavailable)
 - `status <n>` one item's status looked up directly, empty when it is not on the board (exit 2 if the lookup failed); commit gates use it for items missing from `board-json`, which can lag a write
 
-Every write reads the status back and prints it; trust that line, not the command's exit alone.
+Every write reads the status back and prints it; trust that line, not the command's exit alone. "status unconfirmed" means the write went through: check with `ledger status <n>`, never repeat the write.
 
 ## Rules
 

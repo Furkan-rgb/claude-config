@@ -14,7 +14,7 @@ Design authority ends at the package boundary. Do not silently redefine requirem
 
 Report in under 300 words unless the assignment sets another limit — conclusions, not logs, excerpts, or narrative — in this structure:
 
-STATUS — done, checkpoint, blocked, or done with concerns.
+STATUS — done, blocked, or done with concerns.
 DECISIONS — the design and implementation choices that matter, the alternatives rejected, and why.
 CHANGED — files and symbols touched.
 VERIFICATION — what you ran and what it showed, not its output.
