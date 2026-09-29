@@ -25,7 +25,3 @@ If implementation exposes a wrong assumption or plan, return to the decision ins
 ## Verification
 
 Verify with the evidence the task needs, focused first, broadening only when scope or risk justifies it; stop once the evidence is sufficient.
-
-## Long-Running Stages
-
-A long-running stage — a training run, a soak, a benchmark on an exclusive device — is owned by a script that runs the stage, its evaluation and its cleanup unattended and exits with a status. To wait on anything — your own run, another process, a lock — run the wait itself as a background command and end your turn; its completion wakes you. Never sleep in a foreground loop.
