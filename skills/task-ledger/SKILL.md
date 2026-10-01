@@ -58,4 +58,4 @@ Every write reads the status back and prints it; trust that line, not the comman
 - On GitHub, a draft card becomes an issue when it moves to In progress, because commits cite issue numbers.
 - **Milestones:** every open item belongs to one milestone exit; exits are parent issues; status is computed, never hand-written. An exit is an item in a milestone with no parent; its tasks are its sub-items.
 - **Goals:** a milestone is a goal, an outcome derived from the project's design doc, not a bucket; the roadmap is the order of milestones. A task has one parent; one serving two goals is shared groundwork, its own item under the earlier goal. When a design decision changes, re-point or retire the items that traced to it.
-- Only the Lead writes to the board; workers report to the Lead. With the local backend a worktree holds its own copy of `.ledger/ledger.json`, so a worker's write would diverge.
+- Only the Lead writes to the board, so it has one writer; workers report to the Lead.

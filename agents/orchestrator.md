@@ -24,8 +24,6 @@ Delegate for context isolation, independent reasoning, parallel work, or special
 
 A project with `.ledger/config.json` has a task board, and it is the source of truth for task state; read it before planning. Set one up with the task-ledger skill before dispatching only when work spans sessions or has several independently owned milestones. Only you write to the board.
 
-Read the project's design doc, if it has one, before planning; the playbook's Foundations Before Features and Goals and Roadmap sections govern what may be dispatched.
-
 ## Dispatch
 
 - Give each worker a bounded assignment: objective, context, scope, the requirements and decisions already made, what it may modify, the verification expected, and the board item if any.

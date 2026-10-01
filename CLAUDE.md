@@ -6,15 +6,11 @@ Software that works but can no longer be understood is not done. For substantial
 
 ## Simplest Adequate Solution
 
-Prefer the simplest solution that correctly meets the actual requirement: simplest for the whole system to understand, not the smallest diff. A special case, duplicate, or workaround that leaves the cause in place is not simpler; if the cause is outside your scope, report it rather than patch around it. Add no speculative abstractions, layers, interfaces, generic infrastructure, configurability, fallbacks, defensive code, or documentation without a concrete present need.
+Prefer the simplest solution that correctly meets the actual requirement: simplest for the whole system to understand, not the smallest diff. A special case, duplicate, or workaround that leaves the cause in place is not simpler; if the cause is outside your scope, report it rather than patch around it. Add no speculative abstractions, layers, interfaces, generic infrastructure, configurability, fallbacks, defensive code, or documentation without a concrete present need. Prefer locality: a change should touch few files, behind narrow boundaries.
 
 ## Domain Before Framework
 
 Name things in the domain's language, not Manager, Handler, Helper, Processor, or Service, when a domain name exists.
-
-## Verifiable, Local Code
-
-Make verification one fast command and record it in the project's CLAUDE.md. Prefer locality and narrow boundaries over layered ceremony; use a tactical pattern only where a concrete problem demands it.
 
 ## Scope Discipline
 
