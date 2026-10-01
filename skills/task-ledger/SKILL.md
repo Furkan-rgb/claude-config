@@ -35,6 +35,14 @@ The first gives the open items at session start and after compaction; the second
 - `close <n> --text "<completion comment>"`
 - `board-json` the raw board for commit gates (exit 0 fresh, 3 stale, 1 unavailable)
 - `status <n>` one item's status looked up directly, empty when it is not on the board (exit 2 if the lookup failed); commit gates use it for items missing from `board-json`, which can lag a write
+- `milestone list` each milestone with its open/closed item counts and due state
+- `milestone create --title "<title>" [--description ...]`
+- `milestone set <n> <milestone>` assign an item to a milestone, named by its title or a unique prefix (`M3`); a draft card becomes an issue first
+- `parent <child> <parent> [--dry-run]` make an item a sub-item of another (GitHub sub-issues; replaces any existing parent); `--dry-run` prints the API call instead of making it
+- `unparent <child> [--dry-run]` remove an item from its parent
+- `progress [<milestone>]` the tree milestone → exits → tasks with done/total at each level, computed from item states; open milestones unless one is named
+
+When the project has open milestones, `brief` ends with one line such as `Milestones: M3 9/24 exits · M4 3/45 exits`.
 
 Every write reads the status back and prints it; trust that line, not the command's exit alone. "status unconfirmed" means the write went through: check with `ledger status <n>`, never repeat the write.
 
@@ -48,3 +56,6 @@ Every write reads the status back and prints it; trust that line, not the comman
 - **Close** only after the done-condition is verified, with a completion comment of at most 5 lines that cites the commit hash.
 - **Retire, never delete:** an item that is no longer wanted gets a comment saying why and is closed.
 - On GitHub, a draft card becomes an issue when it moves to In progress, because commits cite issue numbers.
+- **Milestones:** every open item belongs to one milestone exit; exits are parent issues; status is computed, never hand-written. An exit is an item in a milestone with no parent; its tasks are its sub-items.
+- **Goals:** a milestone is a goal, an outcome derived from the project's design doc, not a bucket; the roadmap is the order of milestones. A task has one parent; one serving two goals is shared groundwork, its own item under the earlier goal. When a design decision changes, re-point or retire the items that traced to it.
+- Only the Lead writes to the board; workers report to the Lead. With the local backend a worktree holds its own copy of `.ledger/ledger.json`, so a worker's write would diverge.
