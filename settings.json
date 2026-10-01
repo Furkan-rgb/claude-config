@@ -13,12 +13,17 @@
     ],
     "defaultMode": "bypassPermissions"
   },
-  "model": "opus",
+  "model": "sonnet",
   "availableModels": [
     "opus",
     "sonnet",
     "haiku"
   ],
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.py",
+    "refreshInterval": 60
+  },
   "enabledPlugins": {
     "frontend-design@claude-plugins-official": false
   },
@@ -27,13 +32,20 @@
   "autoCompactWindow": 250000,
   "skipDangerousModePermissionPrompt": true,
   "skipWorkflowUsageWarning": true,
-  "theme": "auto",
+  "theme": "custom:monokai-pro",
   "editorMode": "normal",
   "preferredNotifChannel": "auto",
   "remoteControlAtStartup": true,
   "inputNeededNotifEnabled": true,
   "agentPushNotifEnabled": true,
   "autoMode": {
+    "allow": [
+      "$defaults",
+      "Solo Landing: Pushing, fast-forwarding or merging an agent branch or commit into `main` of a github.com/Furkan-rgb repository — including `git push origin <branch>:main` or `<sha>:main` — is the user's normal landing workflow, not Merge Without Review or Modify Shared Resources: there are no other reviewers. A plain force push to `main` is still Git Destructive.",
+      "Agent Branch Upkeep: `git push --force-with-lease` to, and deleting (locally or on the remote), an agent branch (`worktree-agent-*`, `wip/*`, `wip-*`, `codex/*`, `feat/*`) of a Furkan-rgb repository is routine cleanup of agent work, not Git Destructive.",
+      "Agent Worktree Upkeep: `git stash push`, `git reset`, `git checkout`, `git clean` and `git worktree remove [--force]` targeting a worktree under `<repo>/.claude/worktrees/` are routine agent housekeeping, not Irreversible Local Destruction. `git stash drop`/`clear` is still evaluated normally.",
+      "Own Task Tracker: Creating, commenting on, labelling, closing and reopening GitHub issues, and adding or moving GitHub Project items, on Furkan-rgb repositories is task tracking in the user's own tracker, not External System Writes."
+    ],
     "environment": [
       "**Organization**: None — a solo developer working on personal projects on their own machine",
       "**Primary use of Claude Code**: software development, with multi-agent orchestration (an orchestrator dispatching implementer, scout, reviewer and specialist subagents)",
@@ -48,13 +60,6 @@
       "**Secrets management**: None configured",
       "**Trusted internal domains**: None configured",
       "**Sensitive data locations & audiences**: any file or store holding personal data, credentials, or similarly sensitive material"
-    ],
-    "allow": [
-      "$defaults",
-      "Solo Landing: Pushing, fast-forwarding or merging an agent branch or commit into `main` of a github.com/Furkan-rgb repository — including `git push origin <branch>:main` or `<sha>:main` — is the user's normal landing workflow, not Merge Without Review or Modify Shared Resources: there are no other reviewers. A plain force push to `main` is still Git Destructive.",
-      "Agent Branch Upkeep: `git push --force-with-lease` to, and deleting (locally or on the remote), an agent branch (`worktree-agent-*`, `wip/*`, `wip-*`, `codex/*`, `feat/*`) of a Furkan-rgb repository is routine cleanup of agent work, not Git Destructive.",
-      "Agent Worktree Upkeep: `git stash push`, `git reset`, `git checkout`, `git clean` and `git worktree remove [--force]` targeting a worktree under `<repo>/.claude/worktrees/` are routine agent housekeeping, not Irreversible Local Destruction. `git stash drop`/`clear` is still evaluated normally.",
-      "Own Task Tracker: Creating, commenting on, labelling, closing and reopening GitHub issues, and adding or moving GitHub Project items, on Furkan-rgb repositories is task tracking in the user's own tracker, not External System Writes."
     ]
   }
 }

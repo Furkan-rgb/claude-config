@@ -9,12 +9,16 @@ The project chooses its backend once, in `.ledger/config.json` at the project ro
 Items are addressed by number: the local id, or the GitHub issue number. A GitHub card with no
 issue behind it (a draft) is addressed as `draft:<item id>` and becomes an issue when it moves to
 In progress, because commits cite issue numbers.
+
+Milestones group items; within a milestone the items with no parent are its exits and their
+sub-items are its tasks. Progress is computed from item states, never stored.
 """
 import argparse
 import hashlib
 import json
 import os
 import select
+import shlex
 import signal
 import subprocess
 import sys
@@ -108,6 +112,79 @@ class LocalBackend:
 
     def status_of(self, ref):
         return self._find(self._load(), ref)["status"]
+
+    # Milestones and parents: `milestones` is an optional top-level list of {title, description};
+    # an item carries optional `milestone` (a title) and `parent` (an item id).
+
+    def milestones(self):
+        data = self._load()
+        rows = []
+        for m in data.get("milestones", []):
+            mine = [it for it in data["items"] if it.get("milestone") == m["title"]]
+            closed = sum(1 for it in mine if it["status"] == "Done")
+            rows.append({"title": m["title"], "state": "open", "open": len(mine) - closed, "closed": closed, "due": None})
+        return rows
+
+    def create_milestone(self, title, description):
+        data = self._load()
+        if any(m["title"] == title for m in data.get("milestones", [])):
+            raise LedgerError(f"milestone {title!r} already exists")
+        data.setdefault("milestones", []).append({"title": title, "description": description})
+        self._save(data)
+
+    def set_milestone(self, ref, title):
+        data = self._load()
+        self._find(data, ref)["milestone"] = title
+        self._save(data)
+        return ref
+
+    def milestone_of(self, ref):
+        return self._find(self._load(), ref).get("milestone")
+
+    def set_parent(self, child, parent, dry_run):
+        data = self._load()
+        item, up = self._find(data, child), self._find(data, parent)
+        ancestor = up
+        while ancestor is not None:
+            if ancestor is item:
+                raise LedgerError(f"#{up['id']} is #{item['id']} or below it; that would make a cycle")
+            ancestor = self._find(data, ancestor["parent"]) if "parent" in ancestor else None
+        if dry_run:
+            print(f"dry-run: set parent of #{item['id']} to #{up['id']} in {self.path}")
+            return child
+        item["parent"] = up["id"]
+        self._save(data)
+        return child
+
+    def unparent(self, child, dry_run):
+        data = self._load()
+        item = self._find(data, child)
+        if "parent" not in item:
+            raise LedgerError(f"#{item['id']} has no parent")
+        if dry_run:
+            print(f"dry-run: remove parent #{item['parent']} from #{item['id']} in {self.path}")
+            return child
+        del item["parent"]
+        self._save(data)
+        return child
+
+    def parent_of(self, ref):
+        p = self._find(self._load(), ref).get("parent")
+        return str(p) if p is not None else None
+
+    def outline(self, children):
+        data = self._load()
+        node = lambda it: {"ref": str(it["id"]), "title": it["title"], "done": it["status"] == "Done"}
+        result = []
+        for m in data.get("milestones", []):
+            exits = []
+            for it in data["items"]:
+                if it.get("milestone") == m["title"] and it.get("parent") is None:
+                    kids = [node(k) for k in data["items"] if k.get("parent") == it["id"]]
+                    exits.append({**node(it), "child_done": sum(k["done"] for k in kids), "child_total": len(kids),
+                                  "children": kids if children else None})
+            result.append({"title": m["title"], "state": "open", "exits": exits})
+        return result
 
     @staticmethod
     def init(root, args):
@@ -298,6 +375,107 @@ class GitHubBackend:
                 return (node.get("fieldValueByName") or {}).get("name")
         return None
 
+    # Milestones are the repository's own (REST /milestones); parents are GitHub sub-issues
+    # (REST /issues/{n}/sub_issues), which take the child's database id, not its number.
+
+    def _write(self, dry_run, path, *extra):
+        if dry_run:
+            print("dry-run: " + shlex.join(["gh", "api", path, *self.API, *extra]))
+            return None
+        return self._api(path, *extra)
+
+    def _issue_number(self, ref, dry_run=False):
+        """The issue number behind a ref, converting a draft card first (the draft convention)."""
+        ref = str(ref).lstrip("#")
+        if not ref.startswith("draft:"):
+            return ref
+        item = self._item(ref, self.board(force=True)[0])
+        if dry_run:
+            print(f"dry-run: convert {ref} to an issue in {self.repo} (convertProjectV2DraftIssueItemToIssue)")
+            return ref
+        return self._convert_draft(item)
+
+    def _milestone_rows(self):
+        return self._api(f"repos/{self.repo}/milestones?state=all&per_page=100", paginate=True)
+
+    def _milestone_number(self, title):
+        return next(m["number"] for m in self._milestone_rows() if m["title"] == title)
+
+    def milestones(self):
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        rows = []
+        for m in self._milestone_rows():
+            due = m.get("due_on")
+            if due and m["state"] == "open" and due < now:
+                due = f"overdue since {due[:10]}"
+            elif due:
+                due = f"due {due[:10]}"
+            rows.append({"title": m["title"], "state": m["state"], "open": m["open_issues"],
+                         "closed": m["closed_issues"], "due": due, "number": m["number"]})
+        return rows
+
+    def create_milestone(self, title, description):
+        args = ["-X", "POST", "-f", f"title={title}"] + (["-f", f"description={description}"] if description else [])
+        self._api(f"repos/{self.repo}/milestones", *args)
+
+    def set_milestone(self, ref, title):
+        n = self._issue_number(ref)
+        self._api(f"repos/{self.repo}/issues/{n}", "-X", "PATCH", "-F", f"milestone={self._milestone_number(title)}")
+        return n
+
+    def milestone_of(self, ref):
+        return (self._api(f"repos/{self.repo}/issues/{str(ref).lstrip('#')}").get("milestone") or {}).get("title")
+
+    def _db_id(self, n):
+        return self._api(f"repos/{self.repo}/issues/{n}")["id"]
+
+    def set_parent(self, child, parent, dry_run):
+        child, parent = self._issue_number(child, dry_run), self._issue_number(parent, dry_run)
+        child_id = "<id of " + child + ">" if child.startswith("draft:") else self._db_id(child)
+        self._write(dry_run, f"repos/{self.repo}/issues/{parent}/sub_issues", "-X", "POST",
+                    "-F", f"sub_issue_id={child_id}", "-F", "replace_parent=true")
+        return child
+
+    def unparent(self, child, dry_run):
+        child = self._issue_number(child)
+        parent = self.parent_of(child)
+        if parent is None:
+            raise LedgerError(f"#{child} has no parent")
+        self._write(dry_run, f"repos/{self.repo}/issues/{parent}/sub_issue", "-X", "DELETE",
+                    "-F", f"sub_issue_id={self._db_id(child)}")
+        return child
+
+    def parent_of(self, ref):
+        try:
+            return str(self._api(f"repos/{self.repo}/issues/{str(ref).lstrip('#')}/parent")["number"])
+        except LedgerError as e:
+            if "No parent issue found" in str(e):
+                return None
+            raise
+
+    def outline(self, children):
+        rows = self._milestone_rows()
+        if not rows:  # projects without milestones pay one call, not two
+            return []
+        issues = [i for i in self._api(f"repos/{self.repo}/issues?milestone=*&state=all&per_page=100", paginate=True)
+                  if "pull_request" not in i]
+        node = lambda i: {"ref": str(i["number"]), "title": i["title"], "done": i["state"] == "closed"}
+        result = []
+        for m in sorted(rows, key=lambda m: m["number"]):
+            exits = []
+            for i in issues:
+                if (i.get("milestone") or {}).get("number") == m["number"] and not i.get("parent_issue_url"):
+                    summary = i.get("sub_issues_summary") or {}
+                    kids = []
+                    if children and summary.get("total"):
+                        kids = [node(k) for k in self._api(f"repos/{self.repo}/issues/{i['number']}/sub_issues?per_page=100",
+                                                           paginate=True)]
+                    exits.append({**node(i), "child_done": summary.get("completed", 0),
+                                  "child_total": summary.get("total", 0), "children": kids if children else None})
+            exits.sort(key=lambda e: int(e["ref"]))
+            result.append({"title": m["title"], "state": m["state"], "exits": exits})
+        return result
+
     @staticmethod
     def init(root, args):
         if not (args.owner and args.project and args.repo):
@@ -440,6 +618,12 @@ def cmd_brief(b, a):
             if blocked:
                 print(f"+{blocked} Blocked (`ledger list --limit 100` shows them)")
             print(RECONCILE)
+        try:
+            summary = brief_milestones(b)
+        except Exception:
+            summary = ""
+        if summary:
+            print(summary)
         return
     changed = [line(it) for it in rows if previous.get(it["ref"]) != snapshot[it["ref"]]]
     gone = [ref for ref in previous if ref not in snapshot]
@@ -449,6 +633,80 @@ def cmd_brief(b, a):
             print(l)
         for ref in gone:
             print(f"#{ref} left the open columns")
+
+
+def resolve_milestone(b, name):
+    """A milestone title from its exact title or a unique prefix of it, e.g. `M3`."""
+    titles = [m["title"] for m in b.milestones()]
+    if name in titles:
+        return name
+    hits = [t for t in titles if t.lower().startswith(name.lower())]
+    if len(hits) == 1:
+        return hits[0]
+    raise LedgerError(f"no milestone {name!r}" if not hits else f"{name!r} matches several: {'; '.join(hits)}")
+
+
+def short_name(title):
+    return title.split()[0] if title.split() else title
+
+
+def exits_done(m):
+    return sum(e["done"] for e in m["exits"]), len(m["exits"])
+
+
+def cmd_milestone(b, a):
+    if a.mcmd == "list":
+        for m in b.milestones():
+            print(f"{m['title']}  [{m['state']}] {m['open']} open / {m['closed']} closed, {m['due'] or 'no due date'}")
+    elif a.mcmd == "create":
+        b.create_milestone(a.title, a.description or "")
+        m = next((m for m in b.milestones() if m["title"] == a.title), None)
+        print(f"milestone {a.title!r} [{m['state']}]" if m else f"milestone {a.title!r} written, not yet listed")
+    elif a.mcmd == "set":
+        ref = b.set_milestone(a.ref, resolve_milestone(b, a.milestone))
+        try:
+            got = b.milestone_of(ref)
+        except LedgerError as e:
+            got = f"written, unconfirmed: {e}"
+        print(f"#{str(ref).lstrip('#')} milestone: {got}")
+
+
+def cmd_parent(b, a):
+    ref = b.set_parent(a.child, a.parent, a.dry_run)
+    if not a.dry_run:
+        print(f"#{str(ref).lstrip('#')} parent: #{b.parent_of(ref)}")
+
+
+def cmd_unparent(b, a):
+    ref = b.unparent(a.child, a.dry_run)
+    if not a.dry_run:
+        print(f"#{str(ref).lstrip('#')} parent: {b.parent_of(ref) or 'none'}")
+
+
+def cmd_progress(b, a):
+    """Milestone, its exits, their tasks; every count is computed from item states."""
+    tree = b.outline(children=True)
+    if a.milestone:
+        title = resolve_milestone(b, a.milestone)
+        tree = [m for m in tree if m["title"] == title]
+    else:
+        tree = [m for m in tree if m["state"] == "open"]
+    mark = lambda done: "[x]" if done else "[ ]"
+    for m in tree:
+        done, total = exits_done(m)
+        tasks = sum(e["child_done"] for e in m["exits"]), sum(e["child_total"] for e in m["exits"])
+        print(f"{m['title']}  exits {done}/{total} · tasks {tasks[0]}/{tasks[1]}")
+        for e in m["exits"]:
+            print(f"  {mark(e['done'])} #{e['ref']} {e['title']}  {e['child_done']}/{e['child_total']}")
+            for k in e["children"]:
+                print(f"      {mark(k['done'])} #{k['ref']} {k['title']}")
+
+
+def brief_milestones(b):
+    """The optional brief line; empty when the project has no open milestones."""
+    parts = [f"{short_name(m['title'])} {'/'.join(map(str, exits_done(m)))} exits"
+             for m in b.outline(children=False) if m["state"] == "open"]
+    return f"Milestones: {' · '.join(parts)}" if parts else ""
 
 
 def cmd_init(a):
@@ -473,6 +731,13 @@ def main():
     s = sub.add_parser("brief"); s.add_argument("--changes", action="store_true")
     s = sub.add_parser("status"); s.add_argument("ref")
     s = sub.add_parser("board-json"); s.add_argument("--force", action="store_true")
+    s = sub.add_parser("milestone"); ms = s.add_subparsers(dest="mcmd", required=True)
+    ms.add_parser("list")
+    m = ms.add_parser("create"); m.add_argument("--title", required=True); m.add_argument("--description")
+    m = ms.add_parser("set"); m.add_argument("ref"); m.add_argument("milestone")
+    s = sub.add_parser("parent"); s.add_argument("child"); s.add_argument("parent"); s.add_argument("--dry-run", action="store_true")
+    s = sub.add_parser("unparent"); s.add_argument("child"); s.add_argument("--dry-run", action="store_true")
+    s = sub.add_parser("progress"); s.add_argument("milestone", nargs="?")
     s = sub.add_parser("init"); s.add_argument("backend", choices=sorted(BACKENDS))
     s.add_argument("--owner"); s.add_argument("--project"); s.add_argument("--repo")
     a = p.parse_args()

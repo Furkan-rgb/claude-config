@@ -1,0 +1,10 @@
+{
+  "name": "One Dark",
+  "base": "dark",
+  "overrides": {
+    "userMessageBackground": "#2E4A78",
+    "userMessageBackgroundHover": "#38588C",
+    "briefLabelYou": "#61AFEF",
+    "promptBorder": "#61AFEF"
+  }
+}
