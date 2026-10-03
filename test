@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Every check of this setup: the scripts' tests, the settings, and each mod's validation, types and
+# tests. The pre-commit hook runs it; so can you, from anywhere.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+echo "== scripts and settings"
+python3 -m unittest discover -s tests -q
+
+for mod in mods/*/; do
+  echo "== mod ${mod}"
+  claude plugin validate "$mod" | tail -1
+  if [ -f "$mod/.claude-plugin/types/tsconfig.json" ]; then  # laid by the engine at the mod's first load
+    npx -y -p typescript tsc -p "$mod" --noEmit
+  fi
+  claude plugin test "$mod" 2>&1 | tail -3
+done

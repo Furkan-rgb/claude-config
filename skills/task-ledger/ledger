@@ -659,20 +659,7 @@ def cmd_brief(b, a):
     previous = json.loads(state.read_text()) if a.changes and state.is_file() else None
     state.write_text(json.dumps(snapshot))
     if previous is None:
-        if rows:
-            print("Board (open items):")
-            for it in rows:
-                if it["status"].lower() != "blocked":
-                    print(line(it))
-            blocked = sum(1 for it in rows if it["status"].lower() == "blocked")
-            if blocked:
-                print(f"+{blocked} Blocked (`ledger list --limit 100` shows them)")
-            print(RECONCILE)
-        try:
-            summary = brief_milestones(b)
-        except Exception:
-            summary = []
-        for l in summary:
+        for l in full_brief(b, rows):
             print(l)
         return
     changed = [line(it) for it in rows if previous.get(it["ref"]) != snapshot[it["ref"]]]
@@ -769,24 +756,57 @@ def cmd_progress(b, a):
                 print(f"      {mark(k['done'])} #{k['ref']} {k['title']}")
 
 
-def brief_milestones(b):
-    """The optional brief lines; none when the project has no open milestones. The current goal,
-    the first in roadmap order not yet complete, is marked; open work under no goal is listed."""
+def full_brief(b, rows):
+    """The session-start brief, sized by the current goal rather than the board, most important
+    first: the roadmap and the current goal's open exits, then work in progress anywhere, then
+    counts of what is left out. A board without goals is briefed as its open work."""
+    try:
+        lines, shown = goal_brief(b)
+    except Exception as e:
+        lines, shown = [f"Goals unreadable: {str(e)[:150]}"], set()
+    status = lambda s: [it for it in rows if it["status"].lower() == s and it["ref"] not in shown]
+    blocked = len(status("blocked"))
+    if lines:
+        working = status("in progress")
+        if working:
+            lines += ["Also in progress:"] + [f"  {line(it)}" for it in working]
+        hidden = [f"{n} {s}" for n, s in ((len(status("next")), "Next"), (blocked, "Blocked")) if n]
+        if hidden:
+            lines.append(f"Not shown: {', '.join(hidden)} (`ledger list --limit 100` shows them)")
+    elif rows:
+        lines = ["Board (open items):"] + [line(it) for it in status("in progress") + status("next")]
+        if blocked:
+            lines.append(f"+{blocked} Blocked (`ledger list --limit 100` shows them)")
+    return lines + [RECONCILE] if lines else []
+
+
+def goal_brief(b):
+    """The roadmap line, the current goal (the first in roadmap order not yet complete) with its
+    open exits, and the open items under no goal; nothing when the project has no open goals.
+    Also the refs it listed, so the rest of the brief does not repeat them."""
     tree = [m for m in roadmap_order(b.outline(children=False)) if m["state"] == "open"]
     if not tree:
-        return []
+        return [], set()
+    items = {it["ref"]: it for it in b.items()}
     current = next((m for m in tree if not m["exits"] or exits_done(m)[0] < len(m["exits"])), None)
     parts = [f"{'▶ ' if m is current else ''}{short_name(m['title'])} {'/'.join(map(str, exits_done(m)))} exits"
              for m in tree]
-    lines = [f"Milestones: {' · '.join(parts)}"]
+    lines, shown = [f"Milestones: {' · '.join(parts)}"], set()
     if current:
         lines.append(f"Current goal: {current['title']}")
-    unplaced = b.unplaced([it["ref"] for it in open_items(b.items())])
+        for e in current["exits"]:
+            if not e["done"]:
+                it = items.get(e["ref"], {"ref": e["ref"], "status": "not on the board", "title": e["title"]})
+                lines.append(f"  {line(it)}")
+                shown.add(e["ref"])
+    else:
+        lines.append("No current goal: every open milestone is complete. Reconcile, then shape the next goal.")
+    unplaced = b.unplaced([it["ref"] for it in open_items(items.values())])
     if unplaced:
-        shown = ", ".join(r if r.startswith("draft:") else f"#{r}" for r in unplaced[:10])
+        listed = ", ".join(r if r.startswith("draft:") else f"#{r}" for r in unplaced[:10])
         more = f" +{len(unplaced) - 10} more" if len(unplaced) > 10 else ""
-        lines.append(f"Unplaced: {shown}{more}. Every open item belongs to a goal: attach it, propose a goal, or ask.")
-    return lines
+        lines.append(f"Unplaced: {listed}{more}. Every open item belongs to a goal: attach it, propose a goal, or ask.")
+    return lines, shown
 
 
 def cmd_init(a):

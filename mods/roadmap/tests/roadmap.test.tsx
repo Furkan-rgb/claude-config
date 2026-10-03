@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import type { Roadmap } from '../types'
 
@@ -41,6 +41,25 @@ test('the pane shows the current goal, the rest, and the Proposed records as ope
     expect(await ui.find({ text: /blocks: M2 enemy turns/ })).toBeDefined()
     expect(await ui.find({ text: /ADR-0001/ })).toBeUndefined()
   }
+})
+
+test('the session starts without waiting for the board', async ($, on) => {
+  // The board answers 20 s late, as a GitHub board does; the session must be under way before.
+  const clock = mock.clock(on)
+  let answered = 0
+  on('env.get', () => ({ value: '/home/test' }))
+  on('process.run', async () => {
+    await clock.sleep(20_000)
+    answered++
+    return ran('')
+  })
+  on('fs.exists', () => ({ value: false }))
+  on('command.register', () => ({ value: { command: 'roadmap' } }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/home/test/project', surface: 'terminal', isInteractive: true })
+  expect(answered).toBe(0)
+  await clock.advance(20_000)
+  expect(answered).toBe(2)
 })
 
 test('a project without decision records shows no open-questions section', async ($, on) => {

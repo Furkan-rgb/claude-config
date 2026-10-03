@@ -3,6 +3,9 @@
 !/.gitignore
 !/CLAUDE.md
 !/README.md
+!/test
+!/tests/
+!/.githooks/
 !/settings.json
 !/statusline.py
 !/themes/

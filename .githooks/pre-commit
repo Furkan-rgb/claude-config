@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Refuses a commit while any check of the setup fails. Enabled per clone by
+# `git config core.hooksPath .githooks` (see README).
+exec "$(git rev-parse --show-toplevel)/test"

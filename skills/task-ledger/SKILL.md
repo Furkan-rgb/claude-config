@@ -43,7 +43,7 @@ The first gives the open items at session start and after compaction; the second
 - `unparent <child> [--dry-run]` remove an item from its parent
 - `progress [<milestone>]` the tree milestone → exits → tasks with done/total at each level, computed from item states; open milestones unless one is named, in roadmap order; `--json` prints the same tree as JSON
 
-When the project has open milestones, `brief` ends with a line such as `Milestones: ▶ M3 9/24 exits · M4 3/45 exits`, the arrow marking the current goal (the first not yet complete), then `Current goal: <title>`, and an `Unplaced:` line listing open items with neither a milestone nor a parent, when there are any.
+When the project has open milestones, the session-start `brief` is sized by the current goal, not the board. It opens with `Milestones: ▶ M3 9/24 exits · M4 3/45 exits`, the arrow marking the current goal (the first not yet complete). Then come `Current goal: <title>` with that goal's open exits and their status, an `Unplaced:` line for open items with neither a milestone nor a parent, the work in progress anywhere else, and a `Not shown:` count of the remaining Next and Blocked items. `ledger list` shows those. A board without milestones is briefed as its In progress and Next items.
 
 Every write reads the status back and prints it; trust that line, not the command's exit alone. "status unconfirmed" means the write went through: check with `ledger status <n>`, never repeat the write.
 

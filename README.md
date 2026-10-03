@@ -27,7 +27,22 @@ git reset --hard origin/master
 git branch -u origin/master
 ```
 
+Then enable the pre-commit check, which refuses a commit while `./test` fails:
+
+```sh
+git -C ~/.claude config core.hooksPath .githooks
+```
+
 Then start a new Claude Code session. The roadmap pane and the decisions index load from `settings.json`.
+
+## Tests
+
+`./test` runs every check, in about half a minute:
+- the `ledger` and `decisions` scripts against a throwaway local board (`tests/`);
+- the settings: every hook command, the status line, the plugin folders and the theme exist;
+- each mod's validation, type-check and tests.
+
+Not covered: the ledger's GitHub backend, which needs the network, and how the pane looks on screen.
 
 ## Per project
 
