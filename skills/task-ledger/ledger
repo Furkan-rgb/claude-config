@@ -141,6 +141,21 @@ class LocalBackend:
     def milestone_of(self, ref):
         return self._find(self._load(), ref).get("milestone")
 
+    def rename_milestone(self, old, new):
+        data = self._load()
+        if any(m["title"] == new for m in data.get("milestones", [])):
+            raise LedgerError(f"milestone {new!r} already exists")
+        next(m for m in data["milestones"] if m["title"] == old)["title"] = new
+        for it in data["items"]:
+            if it.get("milestone") == old:
+                it["milestone"] = new
+        self._save(data)
+
+    def unplaced(self, refs):
+        """The refs whose items have neither a milestone nor a parent."""
+        data = self._load()
+        return [r for r in refs if not ({"milestone", "parent"} & self._find(data, r).keys())]
+
     def set_parent(self, child, parent, dry_run):
         data = self._load()
         item, up = self._find(data, child), self._find(data, parent)
@@ -426,6 +441,21 @@ class GitHubBackend:
     def milestone_of(self, ref):
         return (self._api(f"repos/{self.repo}/issues/{str(ref).lstrip('#')}").get("milestone") or {}).get("title")
 
+    def rename_milestone(self, old, new):
+        self._api(f"repos/{self.repo}/milestones/{self._milestone_number(old)}", "-X", "PATCH", "-f", f"title={new}")
+
+    def unplaced(self, refs):
+        """The refs whose items have neither a milestone nor a parent. A draft card can carry
+        neither, so it is always unplaced; an issue missing from the open list is skipped."""
+        placed, listed = set(), set()
+        for i in self._api(f"repos/{self.repo}/issues?state=open&per_page=100", paginate=True):
+            if "pull_request" in i:
+                continue
+            listed.add(str(i["number"]))
+            if i.get("milestone") or i.get("parent_issue_url"):
+                placed.add(str(i["number"]))
+        return [r for r in refs if r.startswith("draft:") or (r in listed and r not in placed)]
+
     def _db_id(self, n):
         return self._api(f"repos/{self.repo}/issues/{n}")["id"]
 
@@ -561,6 +591,26 @@ def cmd_close(b, a):
         b.comment(a.ref, a.text)
     b.close(a.ref)
     print(f"#{a.ref.lstrip('#')} now {read_back(b, a.ref)}")
+    try:
+        goal = completed_goal(b, a.ref.lstrip("#"))
+    except LedgerError as e:
+        print(f"goal check skipped: {e}")
+        return
+    if goal:
+        print(f"Goal complete: {goal}. Reconcile before the next goal (lead-playbook, Goals and Roadmap).")
+
+
+def completed_goal(b, ref):
+    """The title of the goal this close completed, or None. The closed item counts as done
+    whatever the list says, because a GitHub list can lag the write."""
+    title = b.milestone_of(ref)
+    if not title:
+        parent = b.parent_of(ref)
+        title = b.milestone_of(parent) if parent else None
+    m = next((m for m in b.outline(children=False) if m["title"] == title), None) if title else None
+    if not m or not m["exits"]:
+        return None
+    return title if all(e["done"] or e["ref"] == ref for e in m["exits"]) else None
 
 
 def cmd_status(b, a):
@@ -621,9 +671,9 @@ def cmd_brief(b, a):
         try:
             summary = brief_milestones(b)
         except Exception:
-            summary = ""
-        if summary:
-            print(summary)
+            summary = []
+        for l in summary:
+            print(l)
         return
     changed = [line(it) for it in rows if previous.get(it["ref"]) != snapshot[it["ref"]]]
     gone = [ref for ref in previous if ref not in snapshot]
@@ -650,6 +700,15 @@ def short_name(title):
     return title.split()[0] if title.split() else title
 
 
+def roadmap_order(milestones):
+    """The roadmap is the milestones ordered by their `M<n>` title prefix; renaming re-orders it.
+    Milestones without the prefix follow, in the backend's order."""
+    def key(m):
+        name = short_name(m["title"])
+        return (0, int(name[1:])) if name[:1] in "Mm" and name[1:].isdigit() else (1, 0)
+    return sorted(milestones, key=key)
+
+
 def exits_done(m):
     return sum(e["done"] for e in m["exits"]), len(m["exits"])
 
@@ -662,6 +721,11 @@ def cmd_milestone(b, a):
         b.create_milestone(a.title, a.description or "")
         m = next((m for m in b.milestones() if m["title"] == a.title), None)
         print(f"milestone {a.title!r} [{m['state']}]" if m else f"milestone {a.title!r} written, not yet listed")
+    elif a.mcmd == "rename":
+        old = resolve_milestone(b, a.milestone)
+        b.rename_milestone(old, a.title)
+        listed = any(m["title"] == a.title for m in b.milestones())
+        print(f"milestone {old!r} now {a.title!r}" if listed else f"milestone {a.title!r} written, not yet listed")
     elif a.mcmd == "set":
         ref = b.set_milestone(a.ref, resolve_milestone(b, a.milestone))
         try:
@@ -685,12 +749,15 @@ def cmd_unparent(b, a):
 
 def cmd_progress(b, a):
     """Milestone, its exits, their tasks; every count is computed from item states."""
-    tree = b.outline(children=True)
+    tree = roadmap_order(b.outline(children=True))
     if a.milestone:
         title = resolve_milestone(b, a.milestone)
         tree = [m for m in tree if m["title"] == title]
     else:
         tree = [m for m in tree if m["state"] == "open"]
+    if a.json:
+        print(json.dumps(tree, indent=2))
+        return
     mark = lambda done: "[x]" if done else "[ ]"
     for m in tree:
         done, total = exits_done(m)
@@ -703,10 +770,23 @@ def cmd_progress(b, a):
 
 
 def brief_milestones(b):
-    """The optional brief line; empty when the project has no open milestones."""
-    parts = [f"{short_name(m['title'])} {'/'.join(map(str, exits_done(m)))} exits"
-             for m in b.outline(children=False) if m["state"] == "open"]
-    return f"Milestones: {' · '.join(parts)}" if parts else ""
+    """The optional brief lines; none when the project has no open milestones. The current goal,
+    the first in roadmap order not yet complete, is marked; open work under no goal is listed."""
+    tree = [m for m in roadmap_order(b.outline(children=False)) if m["state"] == "open"]
+    if not tree:
+        return []
+    current = next((m for m in tree if not m["exits"] or exits_done(m)[0] < len(m["exits"])), None)
+    parts = [f"{'▶ ' if m is current else ''}{short_name(m['title'])} {'/'.join(map(str, exits_done(m)))} exits"
+             for m in tree]
+    lines = [f"Milestones: {' · '.join(parts)}"]
+    if current:
+        lines.append(f"Current goal: {current['title']}")
+    unplaced = b.unplaced([it["ref"] for it in open_items(b.items())])
+    if unplaced:
+        shown = ", ".join(r if r.startswith("draft:") else f"#{r}" for r in unplaced[:10])
+        more = f" +{len(unplaced) - 10} more" if len(unplaced) > 10 else ""
+        lines.append(f"Unplaced: {shown}{more}. Every open item belongs to a goal: attach it, propose a goal, or ask.")
+    return lines
 
 
 def cmd_init(a):
@@ -735,9 +815,10 @@ def main():
     ms.add_parser("list")
     m = ms.add_parser("create"); m.add_argument("--title", required=True); m.add_argument("--description")
     m = ms.add_parser("set"); m.add_argument("ref"); m.add_argument("milestone")
+    m = ms.add_parser("rename"); m.add_argument("milestone"); m.add_argument("--title", required=True)
     s = sub.add_parser("parent"); s.add_argument("child"); s.add_argument("parent"); s.add_argument("--dry-run", action="store_true")
     s = sub.add_parser("unparent"); s.add_argument("child"); s.add_argument("--dry-run", action="store_true")
-    s = sub.add_parser("progress"); s.add_argument("milestone", nargs="?")
+    s = sub.add_parser("progress"); s.add_argument("milestone", nargs="?"); s.add_argument("--json", action="store_true")
     s = sub.add_parser("init"); s.add_argument("backend", choices=sorted(BACKENDS))
     s.add_argument("--owner"); s.add_argument("--project"); s.add_argument("--repo")
     a = p.parse_args()

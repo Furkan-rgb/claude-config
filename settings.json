@@ -1,6 +1,7 @@
 {
   "env": {
-    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1"
+    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1",
+    "CLAUDE_CODE_PLUGIN_DIRS": "/home/furkan/.claude/mods/roadmap"
   },
   "permissions": {
     "allow": [
@@ -12,6 +13,20 @@
       "Agent(orchestrator)"
     ],
     "defaultMode": "bypassPermissions"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/skills/lead-playbook/decisions index",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   },
   "model": "sonnet",
   "availableModels": [

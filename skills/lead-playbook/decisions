@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""decisions: the index of a project's decision records, and new records from the template.
+
+Each decision has one record, `docs/decisions/NNNN-<slug>.md`, headed `# ADR-NNNN: <title>` with a
+`**Status:**` line (Proposed, Accepted, Superseded, Rejected; free prose may follow) and an
+optional `**Blocks:**` line. A Proposed record is an open question. The index is generated from
+the records, never written by hand, so it cannot drift from them.
+"""
+import argparse
+import datetime
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+TEMPLATE = Path(__file__).resolve().parent / "decision-template.md"
+STATUSES = ("proposed", "accepted", "superseded", "rejected")
+TITLE = re.compile(r"^#\s+(ADR-\d+):\s*(.+?)\s*$")
+FIELD = lambda name: re.compile(rf"^\W*\**{name}:?\**:?\s*(.*)$", re.IGNORECASE)
+STATUS, BLOCKS = FIELD("Status"), FIELD("Blocks")
+
+
+def records_dir():
+    start = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path.cwd())
+    for d in [start, *start.parents]:
+        if (d / "docs" / "decisions").is_dir():
+            return d / "docs" / "decisions"
+    return None
+
+
+def classify(status_text):
+    """The status a record is in: the first status word its Status line names, so
+    `Accepted, amended by ADR-0016` is accepted and `Superseded by ADR-0025` superseded."""
+    text = status_text.lower()
+    found = [(text.find(s), s) for s in STATUSES if s in text]
+    return min(found)[1] if found else "unclassified"
+
+
+def plain(text):
+    return re.sub(r"[*`]", "", text).strip()
+
+
+def read_record(path):
+    rid, title, status, blocks = None, path.stem, "unclassified", None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[:40]:
+        if rid is None and (m := TITLE.match(line)):
+            rid, title = m.group(1), plain(m.group(2))
+        elif status == "unclassified" and (m := STATUS.match(line)):
+            status = classify(m.group(1))
+        elif blocks is None and (m := BLOCKS.match(line)):
+            value = plain(m.group(1))
+            blocks = value if value and not value.startswith("<") else None
+    rid = rid or "ADR-" + path.stem.split("-", 1)[0]
+    return {"id": rid, "title": title, "status": status, "blocks": blocks, "path": str(path)}
+
+
+def records(d):
+    return [read_record(p) for p in sorted(d.glob("[0-9]*.md"))]
+
+
+def cut(text, n=110):
+    return text if len(text) <= n else text[: n - 1] + "…"
+
+
+def cmd_index(a):
+    d = records_dir()
+    if d is None:
+        return
+    rows = records(d)
+    if a.json:
+        print(json.dumps(rows, indent=2))
+        return
+    if not rows:
+        return
+    by = {s: [r for r in rows if r["status"] == s] for s in (*STATUSES, "unclassified")}
+    print(f"Decisions ({d.relative_to(d.parent.parent)}): {len(by['proposed'])} open, {len(by['accepted'])} accepted")
+    if by["proposed"]:
+        print("Open (Proposed):")
+        for r in by["proposed"]:
+            print(cut(f"  {r['id']} {r['title']}" + (f" · blocks: {r['blocks']}" if r["blocks"] else "")))
+    if by["accepted"]:
+        print("Accepted:")
+        for r in by["accepted"]:
+            print(cut(f"  {r['id']} {r['title']}"))
+    if by["unclassified"]:
+        print("No recognisable status: " + ", ".join(r["id"] for r in by["unclassified"]))
+
+
+def slug(title):
+    return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60]
+
+
+def cmd_new(a):
+    d = records_dir()
+    if d is None:
+        root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path.cwd())
+        d = root / "docs" / "decisions"
+        d.mkdir(parents=True)
+    numbers = [int(p.name[:4]) for p in d.glob("[0-9][0-9][0-9][0-9]-*.md")]
+    n = f"{max(numbers, default=0) + 1:04d}"
+    text = (TEMPLATE.read_text().replace("NNNN", n).replace("<Title>", a.title)
+            .replace("YYYY-MM-DD", datetime.date.today().isoformat()))
+    path = d / f"{n}-{slug(a.title)}.md"
+    path.write_text(text)
+    print(f"ADR-{n} written: {path}")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="decisions", description=__doc__.split("\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("index"); s.add_argument("--json", action="store_true")
+    s = sub.add_parser("new"); s.add_argument("title")
+    a = p.parse_args()
+    if a.cmd == "index":  # a hook must never fail the session
+        try:
+            cmd_index(a)
+        except Exception:
+            pass
+        return 0
+    cmd_new(a)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

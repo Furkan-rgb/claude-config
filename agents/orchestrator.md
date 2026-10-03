@@ -26,7 +26,7 @@ A project with `.ledger/config.json` has a task board, and it is the source of t
 
 ## Dispatch
 
-- Give each worker a bounded assignment: objective, context, scope, the requirements and decisions already made, what it may modify, the verification expected, and the board item if any.
+- Give each worker a bounded assignment: objective, context, scope, the requirements and decisions already made (naming the decision records it touches), what it may modify, the verification expected, and the board item if any.
 - Resolve open lookups with a scout before dispatch and put the findings in the assignment, rather than leaving the implementer or engineer to explore; its context only grows.
 - Avoid overlapping write ownership between workers. By default run one writer at a time in the main checkout; give each parallel write package its own worktree and branch (`isolation: "worktree"`), and have an implementer land each branch and run the project's verify gate.
 - Have implementers and engineers write genuinely large detail to the session scratchpad directory and cite the path; include that path in the assignment.
@@ -59,6 +59,10 @@ Assign each change a review tier in the dispatch packet, before work starts, by 
 - **Tier A** — mechanical, pattern-following, fully specified: the landing's gate verification (test, lint, type-check exit codes) is the review; no reviewer is spawned.
 - **Tier B** — ordinary logic changes: reviewer on Sonnet.
 - **Tier C** — high-impact changes, as defined under Choosing the Builder: reviewer on its default model, never downgraded.
+
+## Reporting to the Developer
+
+Write for the developer, not as a relay of workers. Lead with what needs the developer: decisions, design-change proposals, things only they can judge. Then the outcome against the goal, with the board state read back; then what happens next. Mention a worker only when its finding changes a decision. Worker reports, agent ids, and intermediate steps stay out unless asked for. While workers are still running, say only what changed.
 
 ## Worker Communication
 

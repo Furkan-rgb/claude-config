@@ -32,17 +32,18 @@ The first gives the open items at session start and after compaction; the second
 - `create --title "<done-condition>" [--body ...] [--status Next]`
 - `move <n> <status>`
 - `comment <n> --text "..."`
-- `close <n> --text "<completion comment>"`
+- `close <n> --text "<completion comment>"`; when the item was the last open exit of its milestone, it also prints `Goal complete: <title>`, the cue to reconcile before the next goal
 - `board-json` the raw board for commit gates (exit 0 fresh, 3 stale, 1 unavailable)
 - `status <n>` one item's status looked up directly, empty when it is not on the board (exit 2 if the lookup failed); commit gates use it for items missing from `board-json`, which can lag a write
 - `milestone list` each milestone with its open/closed item counts and due state
 - `milestone create --title "<title>" [--description ...]`
+- `milestone rename <milestone> --title "<new title>"` retitle a milestone; renumbering its `M<n>` prefix re-orders the roadmap
 - `milestone set <n> <milestone>` assign an item to a milestone, named by its title or a unique prefix (`M3`); a draft card becomes an issue first
 - `parent <child> <parent> [--dry-run]` make an item a sub-item of another (GitHub sub-issues; replaces any existing parent); `--dry-run` prints the API call instead of making it
 - `unparent <child> [--dry-run]` remove an item from its parent
-- `progress [<milestone>]` the tree milestone → exits → tasks with done/total at each level, computed from item states; open milestones unless one is named
+- `progress [<milestone>]` the tree milestone → exits → tasks with done/total at each level, computed from item states; open milestones unless one is named, in roadmap order; `--json` prints the same tree as JSON
 
-When the project has open milestones, `brief` ends with one line such as `Milestones: M3 9/24 exits · M4 3/45 exits`.
+When the project has open milestones, `brief` ends with a line such as `Milestones: ▶ M3 9/24 exits · M4 3/45 exits`, the arrow marking the current goal (the first not yet complete), then `Current goal: <title>`, and an `Unplaced:` line listing open items with neither a milestone nor a parent, when there are any.
 
 Every write reads the status back and prints it; trust that line, not the command's exit alone. "status unconfirmed" means the write went through: check with `ledger status <n>`, never repeat the write.
 
@@ -57,5 +58,5 @@ Every write reads the status back and prints it; trust that line, not the comman
 - **Retire, never delete:** an item that is no longer wanted gets a comment saying why and is closed.
 - On GitHub, a draft card becomes an issue when it moves to In progress, because commits cite issue numbers.
 - **Milestones:** every open item belongs to one milestone exit; exits are parent issues; status is computed, never hand-written. An exit is an item in a milestone with no parent; its tasks are its sub-items.
-- **Goals:** a milestone is a goal, an outcome derived from the project's design doc, not a bucket; the roadmap is the order of milestones. A task has one parent; one serving two goals is shared groundwork, its own item under the earlier goal. When a design decision changes, re-point or retire the items that traced to it.
+- **Goals:** a milestone is a goal, an outcome derived from the project's decision records, not a bucket; the roadmap is the order of milestones, set by their `M<n>` title prefix. A milestone's description begins with a `Serves:` line naming the records it derives from (`Serves: ADR-0013, ADR-0020`). A task has one parent; one serving two goals is shared groundwork, its own item under the earlier goal. When a design decision changes, find the goals that traced to it by their `Serves:` lines and re-point or retire them and their items.
 - Only the Lead writes to the board, so it has one writer; workers report to the Lead.
