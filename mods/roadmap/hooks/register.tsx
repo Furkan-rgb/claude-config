@@ -46,7 +46,8 @@ const touchesRecords = (path: string) => path.includes(`${RECORDS}/`)
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'roadmap', description: 'Show the roadmap and open questions in a pane' })
-    await refresh($)
+    // Not awaited: a GitHub board takes seconds to read, and the session must not wait for it.
+    void refresh($)
     // Board changes made outside this session (another session, the GitHub web UI).
     $.clock.every(5 * 60_000, () => void refresh($))
     if ((await $.fs.exists('.ledger/config.json')) || (await $.fs.exists(RECORDS))) {
