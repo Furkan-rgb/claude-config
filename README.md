@@ -38,5 +38,4 @@ Then start a new Claude Code session. The roadmap pane and the decisions index l
 
 - `settings.local.json`: this machine's own permissions.
 - Skills synced from claude.ai (`skills/synced/`): they arrive with the account.
-- `find-skills`: install it with `npx skills add vercel-labs/skills --skill find-skills`.
 - Per-project memory (`projects/*/memory/`): it is keyed by each project's absolute path.
