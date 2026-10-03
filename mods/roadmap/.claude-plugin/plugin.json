@@ -1,0 +1,6 @@
+{
+  "name": "roadmap",
+  "version": "0.1.0",
+  "description": "A pane showing the project's roadmap from the ledger and the design doc's Open items",
+  "types": "./types/index.d.ts"
+}

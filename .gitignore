@@ -11,3 +11,6 @@
 !/skills/lead-playbook/
 !/skills/task-ledger/
 __pycache__/
+!/mods/
+# Written by the engine on load; regenerated per build.
+/mods/*/.claude-plugin/types/
