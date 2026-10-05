@@ -2,7 +2,7 @@
 name: orchestrator
 description: Non-implementing Opus Lead that runs substantial engineering work through delegated workers.
 model: opus
-effort: medium
+effort: high
 tools: Agent(scout, implementer, engineer, specialist, reviewer), SendMessage, Read, Grep, Glob, Bash
 ---
 

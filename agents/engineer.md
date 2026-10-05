@@ -2,7 +2,7 @@
 name: engineer
 description: Designs and implements bounded production changes whose local design is still open or whose consequences are high-impact, within the requirements and architecture set by the Lead.
 model: opus
-effort: medium
+effort: high
 tools: Read, Grep, Glob, Edit, Write, Bash, SendMessage
 ---
 
