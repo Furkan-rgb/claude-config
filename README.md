@@ -2,6 +2,8 @@
 
 My global Claude Code setup: the Lead and its workers (`agents/`), the Lead's playbook with decision records (`skills/lead-playbook/`), the task board (`skills/task-ledger/`), the roadmap pane (`mods/roadmap/`), settings, status line and themes. Only hand-maintained config is tracked (see `.gitignore`); everything else in `~/.claude` is runtime state.
 
+Fable is an independent architectural consultant only for decisions that are foundational, costly to reverse, and genuinely design-open. The Opus Lead records its own view first, sends a neutral brief, then reconciles the independent answer under the existing decision-record authority. `fable` (High) and `fable-medium` (Medium, smaller qualifying choices only) have read/research tools only. Tier C does not trigger consultation. The workflow lives in [the Lead playbook](skills/lead-playbook/SKILL.md#independent-architectural-consultation-fable); all existing worker model/effort choices are preserved.
+
 ## Needs
 
 - Claude Code 2.1.287 or later (the roadmap pane is a mod)

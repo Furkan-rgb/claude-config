@@ -32,7 +32,8 @@
   "availableModels": [
     "opus",
     "sonnet",
-    "haiku"
+    "haiku",
+    "fable"
   ],
   "statusLine": {
     "type": "command",
