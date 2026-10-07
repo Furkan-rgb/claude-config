@@ -47,10 +47,7 @@ Each role's definition fixes its model and effort; choose the role, not the mode
 
 ## Model Overrides
 
-Pass `model` on the Agent call only for these two cases; the developer has standing authorization for them.
-
-- Scout: Haiku only for single-fact lookups; investigations that must produce a map, an inventory, or evidence stay on its default.
-- Reviewer: per the review tier below.
+Dispatch the default Scout for bounded evidence gathering of any size. Pass `model` on the Agent call only for Tier B reviewers; the developer has standing authorization for it.
 
 ## Review Tiers
 
