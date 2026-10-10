@@ -1,4 +1,5 @@
 import json
+import subprocess
 import unittest
 
 from support import LEDGER, ProjectTest
@@ -129,13 +130,95 @@ class Brief(LedgerTest):
         self.item("Grid draws", "Next")
         self.ledger("brief", "--changes")
         self.assertEqual(self.ledger("brief", "--changes"), "")
-        self.ledger("move", "1", "In progress")
+        self.ledger("move", "1", "Blocked")
         self.assertEqual(self.ledger("brief", "--changes"),
-                         "Board changes since the last brief:\n#1 [In progress] Grid draws\n")
+                         "Board changes since the last brief:\n#1 [Blocked] Grid draws\n")
 
     def test_never_fails_outside_a_project(self):
         (self.root / ".ledger" / "config.json").unlink()
         self.assertEqual(self.ledger("brief"), "")
+
+
+class Hooks(LedgerTest):
+    def hook(self, event, **fields):
+        """What `ledger hook` prints for this hook input, parsed; None when it prints nothing."""
+        ran = subprocess.run([str(LEDGER), "hook"], cwd=self.root, env=self.env, capture_output=True, text=True,
+                             input=json.dumps({"hook_event_name": event, "session_id": "S1", **fields}), timeout=30)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        return json.loads(ran.stdout) if ran.stdout.strip() else None
+
+    def dispatch(self, prompt, agent="w1"):
+        self.hook("PostToolUse", tool_name="Agent", tool_input={"prompt": prompt},
+                  tool_response={"status": "async_launched", "agentId": agent})
+
+    def stop(self):
+        return self.hook("Stop", stop_hook_active=False)
+
+
+class Workers(Hooks):
+    def test_a_dispatch_must_name_its_card(self):
+        refused = self.hook("PreToolUse", tool_name="Agent", tool_input={"prompt": "Look around"})
+        self.assertEqual(refused["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIsNone(self.hook("PreToolUse", tool_name="Agent", tool_input={"prompt": "Board: none\nLook"}))
+
+    def test_a_dispatch_puts_its_card_in_progress(self):
+        self.item("Grid draws", "Next")
+        self.dispatch("Board: #1\nDraw the grid.")
+        self.assertEqual(self.ledger("status", "1"), "In progress\n")
+        self.assertNotIn("no live worker", self.ledger("brief"))
+
+    def test_a_stopped_worker_waits_on_a_decision_until_its_card_is_written(self):
+        self.item("Grid draws", "Next")
+        self.dispatch("Board: #1")
+        self.assertIsNone(self.stop())
+        self.hook("SubagentStop", agent_id="w1")
+        self.assertIn("Waiting on a decision (worker stopped): #1.", self.ledger("brief"))
+        self.assertIn("#1: its worker stopped", self.stop()["reason"])
+        self.assertIsNone(self.hook("Stop", stop_hook_active=True))
+        self.ledger("comment", "1", "--text", "Reviewed; landing next.")
+        self.assertIsNone(self.stop())
+
+    def test_work_in_progress_without_a_worker_is_flagged(self):
+        self.item("Grid draws", "In progress")
+        self.assertIn("In progress with no live worker: #1.", self.ledger("brief"))
+
+    def test_claim_refuses_an_unknown_worker(self):
+        self.item("Grid draws", "In progress")
+        self.assertIn("no worker", self.refused(LEDGER, "claim", "1", "nosuchagent"))
+
+    def test_hooks_are_silent_outside_a_project(self):
+        (self.root / ".ledger" / "config.json").unlink()
+        self.assertIsNone(self.hook("PreToolUse", tool_name="Agent", tool_input={"prompt": "Look around"}))
+        self.assertIsNone(self.stop())
+
+
+class Audit(Hooks):
+    def close(self, ref):
+        self.ledger("close", ref, "--text", "done")
+
+    def test_ten_closes_make_an_audit_due_and_block_turn_end(self):
+        for n in range(9):
+            self.close(self.item(f"Task {n}", "Next"))
+        self.assertIsNone(self.stop())
+        self.close(self.item("Task 9", "Next"))
+        self.assertIn("Board audit due (10 items closed since the last audit)", self.ledger("brief"))
+        self.assertIn("Board audit due", self.stop()["reason"])
+
+    def test_closing_an_exit_makes_it_due_at_once(self):
+        self.ledger("milestone", "create", "--title", "M1 Grid")
+        self.close(self.item("Grid draws", "Next", "M1"))
+        self.assertIn("Board audit due (exit #1 closed)", self.ledger("brief"))
+
+    def test_an_audit_card_holds_it_while_in_progress_and_closing_it_resets_the_count(self):
+        for n in range(10):
+            self.close(self.item(f"Task {n}", "Next"))
+        audit = self.item("Board audit: 2026-10-10", "Next")
+        self.assertIn(f"dispatch a scout for #{audit}", self.ledger("brief"))
+        self.dispatch(f"Board: #{audit}")
+        self.assertNotIn("Board audit due", self.ledger("brief"))
+        self.close(audit)
+        self.assertNotIn("Board audit due", self.ledger("brief"))
+        self.assertIsNone(self.stop())
 
 
 if __name__ == "__main__":

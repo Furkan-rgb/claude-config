@@ -14,15 +14,18 @@ Milestones group items; within a milestone the items with no parent are its exit
 sub-items are its tasks. Progress is computed from item states, never stored.
 """
 import argparse
+import fcntl
 import hashlib
 import json
 import os
+import re
 import select
 import shlex
 import signal
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 STATUSES = ["Backlog", "Next", "In progress", "Blocked", "Done"]
@@ -108,7 +111,15 @@ class LocalBackend:
         self._save(data)
 
     def close(self, ref):
-        self.move(ref, "Done")
+        data = self._load()
+        item = self._find(data, ref)
+        item["status"], item["closed_at"] = "Done", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        self._save(data)
+
+    def recently_closed(self):
+        return [{"ref": str(it["id"]), "title": it["title"], "closed_at": it["closed_at"],
+                 "exit": "milestone" in it and "parent" not in it}
+                for it in self._load()["items"] if it["status"] == "Done" and it.get("closed_at")]
 
     def status_of(self, ref):
         return self._find(self._load(), ref)["status"]
@@ -226,6 +237,7 @@ class GitHubBackend:
         self.kind = config.get("owner_type", "users")
         self.base = f"/{self.kind}/{self.owner}/projectsV2/{self.number}"
         self.cache = private_dir() / f"github-{self.owner}-{self.number}.json"
+        self.closed_cache = private_dir() / f"closed-{self.owner}-{self.number}.json"
 
     def _gh(self, *args, timeout=20):
         # Its own process group, killed whole on timeout: subprocess.run kills only gh and then
@@ -339,6 +351,16 @@ class GitHubBackend:
         self._api(f"{self.base}/items/{item_id}", "-X", "PATCH",
                   "-F", f"fields[][id]={board['status_field_id']}",
                   "-f", f"fields[][value]={self._option_id(board, status)}")
+        # Writes refresh the cache before writing, so carry the new status into it, or every read
+        # in the next minute (the per-turn brief among them) shows the old one.
+        if self.cache.is_file():
+            data = json.loads(self.cache.read_text())
+            for it in data["items"]:
+                if it["project_item_id"] == item_id:
+                    it["status"] = status
+            tmp = self.cache.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data))
+            tmp.replace(self.cache)
 
     def _convert_draft(self, item):
         repo_id = json.loads(self._gh("repo", "view", self.repo, "--json", "id"))["id"]
@@ -362,6 +384,21 @@ class GitHubBackend:
     def close(self, ref):
         self.move(ref, "Done")
         self._gh("issue", "close", str(ref).lstrip("#"), "--repo", self.repo)
+        self.closed_cache.unlink(missing_ok=True)
+
+    def recently_closed(self):
+        """The last 100 closed issues, however they were closed (a `Closes #n` commit too), with
+        when and whether each is a milestone exit; cached like the board."""
+        if self.closed_cache.is_file() and time.time() - self.closed_cache.stat().st_mtime < CACHE_SECONDS:
+            return json.loads(self.closed_cache.read_text())
+        rows = [{"ref": str(i["number"]), "title": i["title"], "closed_at": i["closed_at"],
+                 "exit": bool(i.get("milestone")) and not i.get("parent_issue_url")}
+                for i in self._api(f"repos/{self.repo}/issues?state=closed&sort=updated&direction=desc&per_page=100")
+                if "pull_request" not in i and i.get("closed_at")]
+        tmp = self.closed_cache.with_suffix(".tmp")
+        tmp.write_text(json.dumps(rows))
+        tmp.replace(self.closed_cache)
+        return rows
 
     def status_of(self, ref):
         """An item's status straight from GitHub, or None when it is not on this project. Measured
@@ -531,7 +568,148 @@ def open_backend():
     cls = BACKENDS.get(config.get("backend"))
     if cls is None:
         raise LedgerError(f"unknown backend {config.get('backend')!r}")
-    return cls(root, config)
+    b = cls(root, config)
+    b.config = config
+    return b
+
+
+# ── workers: which agent holds which card ────────────────────────────────────────────────────
+# One file per board, outside the repo, so every checkout of the same GitHub board shares it.
+# A record is {card, session, pid, pid_start, stopped, settled}. A worker is live while it has not
+# stopped and the Claude process that started it still runs; a record that is not live and not
+# settled is a card waiting on the Lead's decision, and any board write to that card settles it.
+
+BOARD_LINE = re.compile(r"^\s*Board:\s*(?:#(\d+)|(none))\b", re.I | re.M)
+
+
+def workers_path(b):
+    key = (f"github-{b.owner}-{b.number}" if isinstance(b, GitHubBackend)
+           else hashlib.sha1(str(b.path.parent.parent).encode()).hexdigest()[:12])
+    return private_dir() / f"workers-{key}.json"
+
+
+class Workers:
+    """The worker records, locked for a read-modify-write: hooks for parallel workers run at once."""
+
+    def __init__(self, b):
+        self.path = workers_path(b)
+
+    def __enter__(self):
+        self.lock = open(self.path.with_suffix(".lock"), "w")
+        fcntl.flock(self.lock, fcntl.LOCK_EX)
+        self.records = json.loads(self.path.read_text()) if self.path.is_file() else {}
+        return self.records
+
+    def __exit__(self, *exc):
+        if exc[0] is None:
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.records, indent=1))
+            tmp.replace(self.path)
+        self.lock.close()
+
+
+def claude_process():
+    """The pid and start time of the Claude Code process this hook runs under, or (None, None)."""
+    pid = os.getppid()
+    while pid > 1:
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            return None, None
+        name, rest = stat[stat.index("(") + 1:stat.rindex(")")], stat[stat.rindex(")") + 2:].split()
+        if name == "claude":
+            return pid, rest[19]
+        pid = int(rest[1])
+    return None, None
+
+
+def is_live(r):
+    if r["stopped"]:
+        return False
+    if r["pid"] is None:
+        return True
+    try:
+        stat = Path(f"/proc/{r['pid']}/stat").read_text()
+    except OSError:
+        return False
+    return stat[stat.rindex(")") + 2:].split()[19] == r["pid_start"]
+
+
+def settle(b, ref):
+    """A board write to a card is the Lead's decision on it: its stopped workers need no more."""
+    ref = str(ref).lstrip("#")
+    with Workers(b) as records:
+        for r in records.values():
+            if r["card"] == ref and not is_live(r):
+                r["settled"] = True
+
+
+def record_worker(b, card, agent, session, stopped=None):
+    """Record a worker against a card; a new worker is the decision on the card's stopped ones."""
+    pid, start = claude_process()
+    with Workers(b) as records:
+        for r in records.values():
+            if r["card"] == card and not is_live(r):
+                r["settled"] = True
+        records[agent] = {"card": card, "session": session, "pid": pid, "pid_start": start,
+                          "stopped": stopped, "settled": False}
+
+
+def worker_state(b, items):
+    """The open cards whose worker stopped and await a decision, each with the sessions that
+    dispatched it, and the In progress cards with no live worker. Drops records of Done cards,
+    which need nothing more."""
+    status = {it["ref"]: (it["status"] or "").lower() for it in items}
+    with Workers(b) as records:
+        for agent in [a for a, r in records.items() if status.get(r["card"]) == "done"]:
+            del records[agent]
+        live = {r["card"] for r in records.values() if is_live(r)}
+        waiting = {}
+        for r in records.values():
+            if not r["settled"] and r["card"] not in live and status.get(r["card"]) in OPEN_ORDER:
+                waiting.setdefault(r["card"], set()).add(r["session"])
+    idle = [ref for ref, s in status.items() if s == "in progress" and ref not in live and ref not in waiting]
+    return dict(sorted(waiting.items(), key=lambda kv: int(kv[0]))), idle
+
+
+def worker_lines(b, items):
+    waiting, idle = worker_state(b, items)
+    lines = []
+    if waiting:
+        lines.append("Waiting on a decision (worker stopped): " + ", ".join(f"#{r}" for r in waiting)
+                     + ". Move, comment on or close each.")
+    if idle:
+        lines.append("In progress with no live worker: " + ", ".join(r if r.startswith("draft:") else f"#{r}" for r in idle)
+                     + ". Dispatch, move or close each.")
+    return lines
+
+
+# ── board audit: a card titled `Board audit: …`, due after enough closes or a finished exit ─────
+
+AUDIT = "Board audit"
+
+
+def audit_line(b, items):
+    """`Board audit due (<reason>): …` while an audit is due and none is In progress, else None.
+    Due once `audit_every_closes` items (default 10), or any milestone exit, closed after the last
+    audit card did; computed from the board, so a `Closes #n` commit counts like `ledger close`."""
+    audits = [it for it in open_items(items) if it["title"].startswith(AUDIT)]
+    if any(it["status"].lower() == "in progress" for it in audits):
+        return None
+    closed = b.recently_closed()
+    last = max((c["closed_at"] for c in closed if c["title"].startswith(AUDIT)), default="")
+    since = [c for c in closed if c["closed_at"] > last and not c["title"].startswith(AUDIT)]
+    exits = [f"#{c['ref']}" for c in since if c["exit"]]
+    if exits:
+        more = f" +{len(exits) - 3} more" if len(exits) > 3 else ""
+        reason = f"exit {', '.join(exits[:3])}{more} closed"
+    elif len(since) >= int(b.config.get("audit_every_closes", 10)):
+        reason = f"{len(since)} items closed since the last audit"
+    else:
+        return None
+    todo = (f"dispatch a scout for #{audits[0]['ref']}" if audits
+            else f"create a `{AUDIT}: <date>` card and dispatch a scout for it")
+    return f"{AUDIT} due ({reason}): {todo} (task-ledger skill, Board audit)."
 
 
 # ── commands ─────────────────────────────────────────────────────────────────────────────────
@@ -578,11 +756,13 @@ def cmd_create(b, a):
 
 def cmd_move(b, a):
     ref = b.move(a.ref, canonical_status(a.status))
+    settle(b, ref)
     print(f"#{str(ref).lstrip('#')} now {read_back(b, ref)}")
 
 
 def cmd_comment(b, a):
     b.comment(a.ref, a.text)
+    settle(b, a.ref)
     print(f"commented on #{a.ref.lstrip('#')}")
 
 
@@ -590,6 +770,7 @@ def cmd_close(b, a):
     if a.text:
         b.comment(a.ref, a.text)
     b.close(a.ref)
+    settle(b, a.ref)
     print(f"#{a.ref.lstrip('#')} now {read_back(b, a.ref)}")
     try:
         goal = completed_goal(b, a.ref.lstrip("#"))
@@ -644,32 +825,29 @@ def cmd_board_json(b, a):
 def cmd_brief(b, a):
     """For hooks. Full brief at session start, resume and compaction; on each prompt only what
     changed since the last brief this session, and nothing when nothing did."""
-    rows = [it for it in b.items() if (it["status"] or "").lower() in BRIEF_STATUSES]
+    items = b.items()
+    rows = [it for it in items if (it["status"] or "").lower() in BRIEF_STATUSES]
     rows.sort(key=lambda it: OPEN_ORDER[it["status"].lower()])
     snapshot = {it["ref"]: f"{it['status']}|{it['title']}" for it in rows}
-    try:
-        # A hook writes its input at once and closes stdin; a background shell may hold stdin
-        # open forever, so wait briefly rather than block on it.
-        waiting = not sys.stdin.isatty() and select.select([sys.stdin], [], [], 1)[0]
-        hook = json.loads(sys.stdin.read() or "{}") if waiting else {}
-    except ValueError:
-        hook = {}
-    session = hook.get("session_id") or "nosession"
+    session = hook_input().get("session_id") or "nosession"
     state = private_dir() / f"brief-{hashlib.sha1(str(project_root()).encode()).hexdigest()[:12]}-{session}.json"
     previous = json.loads(state.read_text()) if a.changes and state.is_file() else None
     state.write_text(json.dumps(snapshot))
     if previous is None:
         for l in full_brief(b, rows):
             print(l)
-        return
-    changed = [line(it) for it in rows if previous.get(it["ref"]) != snapshot[it["ref"]]]
-    gone = [ref for ref in previous if ref not in snapshot]
-    if changed or gone:
-        print("Board changes since the last brief:")
-        for l in changed:
+    else:
+        changed = [line(it) for it in rows if previous.get(it["ref"]) != snapshot[it["ref"]]]
+        gone = [ref for ref in previous if ref not in snapshot]
+        if changed or gone:
+            print("Board changes since the last brief:")
+            for l in changed:
+                print(l)
+            for ref in gone:
+                print(f"#{ref} left the open columns")
+    for l in worker_lines(b, items) + [audit_line(b, items) or ""]:  # every brief, until dealt with
+        if l:
             print(l)
-        for ref in gone:
-            print(f"#{ref} left the open columns")
 
 
 def resolve_milestone(b, name):
@@ -801,12 +979,82 @@ def goal_brief(b):
                 shown.add(e["ref"])
     else:
         lines.append("No current goal: every open milestone is complete. Reconcile, then shape the next goal.")
-    unplaced = b.unplaced([it["ref"] for it in open_items(items.values())])
+    unplaced = b.unplaced([it["ref"] for it in open_items(items.values()) if not it["title"].startswith(AUDIT)])
     if unplaced:
         listed = ", ".join(r if r.startswith("draft:") else f"#{r}" for r in unplaced[:10])
         more = f" +{len(unplaced) - 10} more" if len(unplaced) > 10 else ""
         lines.append(f"Unplaced: {listed}{more}. Every open item belongs to a goal: attach it, propose a goal, or ask.")
     return lines, shown
+
+
+def cmd_claim(b, a):
+    """Record a running worker against a card, for a worker the dispatch hook did not record.
+    A mistyped id would mark the card live until the session ends, so the id must be a worker's."""
+    card = a.ref.lstrip("#")
+    if not list((Path.home() / ".claude" / "projects").glob(f"*/*/subagents/agent-{a.worker}.jsonl")):
+        raise LedgerError(f"no worker {a.worker}: use the agentId its launch returned")
+    record_worker(b, card, a.worker, os.environ.get("CLAUDE_CODE_SESSION_ID"))
+    print(f"#{card}: worker {a.worker} recorded against it")
+
+
+def hook_input():
+    # A hook writes its input at once and closes stdin; a background shell may hold stdin open
+    # forever, so wait briefly rather than block on it.
+    try:
+        waiting = not sys.stdin.isatty() and select.select([sys.stdin], [], [], 1)[0]
+        return json.loads(sys.stdin.read() or "{}") if waiting else {}
+    except ValueError:
+        return {}
+
+
+def cmd_hook(b, hook):
+    """The worker hooks: tie each Agent dispatch to its card, and each worker stop to a decision."""
+    event, tool = hook.get("hook_event_name"), hook.get("tool_name")
+    prompt = (hook.get("tool_input") or {}).get("prompt") or ""
+    named = BOARD_LINE.search(prompt)
+
+    if event == "PreToolUse" and tool == "Agent" and not named:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "permissionDecision": "deny",
+            "permissionDecisionReason": "Name the card this worker serves: add a line `Board: #<n>` to the prompt, "
+                                        "or `Board: none` for work outside the board (task-ledger skill, Workers)."}}))
+
+    elif event == "PostToolUse" and tool == "Agent" and named and named.group(1):
+        card, response = named.group(1), hook.get("tool_response") or {}
+        if not response.get("agentId"):
+            return
+        record_worker(b, card, response["agentId"], hook.get("session_id"),
+                      stopped=None if response.get("status") == "async_launched" else time.time())
+        try:
+            status = b.status_of(card)
+            if (status or "").lower() not in ("in progress", "done"):
+                b.move(card, "In progress")
+                status = read_back(b, card)
+            note = f"Board: #{card} is {status}; this worker is recorded against it."
+        except Exception as e:
+            note = f"Board: worker recorded against #{card}, but its status could not be set ({str(e)[:150]}); move it yourself."
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": note}}))
+
+    elif event in ("SubagentStart", "SubagentStop"):
+        with Workers(b) as records:
+            r = records.get(hook.get("agent_id"))
+            if r is None:
+                return
+            if event == "SubagentStop":
+                r["stopped"] = time.time()
+            else:  # resumed, possibly under a new Claude process
+                r["pid"], r["pid_start"] = claude_process()
+                r.update(stopped=None, settled=False, session=hook.get("session_id"))
+
+    elif event == "Stop" and not hook.get("stop_hook_active"):
+        # Only this session's cards: another session's Lead decides on the workers it dispatched.
+        # The audit is the board's, so it blocks every session until one dispatches it.
+        session, items = hook.get("session_id"), b.items()
+        cards = [c for c, sessions in worker_state(b, items)[0].items() if session in sessions]
+        reasons = [audit_line(b, items)] + (["; ".join(f"#{c}: its worker stopped" for c in cards)
+                                            + ". Move, comment on or close each first."] if cards else [])
+        if any(reasons):
+            print(json.dumps({"decision": "block", "reason": " ".join(r for r in reasons if r)}))
 
 
 def cmd_init(a):
@@ -829,6 +1077,8 @@ def main():
     s = sub.add_parser("comment"); s.add_argument("ref"); s.add_argument("--text", required=True)
     s = sub.add_parser("close"); s.add_argument("ref"); s.add_argument("--text")
     s = sub.add_parser("brief"); s.add_argument("--changes", action="store_true")
+    sub.add_parser("hook")
+    s = sub.add_parser("claim"); s.add_argument("ref"); s.add_argument("worker")
     s = sub.add_parser("status"); s.add_argument("ref")
     s = sub.add_parser("board-json"); s.add_argument("--force", action="store_true")
     s = sub.add_parser("milestone"); ms = s.add_subparsers(dest="mcmd", required=True)
@@ -843,9 +1093,12 @@ def main():
     s.add_argument("--owner"); s.add_argument("--project"); s.add_argument("--repo")
     a = p.parse_args()
 
-    if a.cmd == "brief":  # a hook must never fail the turn
+    if a.cmd in ("brief", "hook"):  # a hook must never fail the turn
         try:
-            cmd_brief(open_backend(), a)
+            if a.cmd == "brief":
+                cmd_brief(open_backend(), a)
+            elif project_root():  # a project without a board dispatches freely
+                cmd_hook(open_backend(), hook_input())
         except Exception:
             pass
         return 0
