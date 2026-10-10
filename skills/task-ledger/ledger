@@ -39,6 +39,17 @@ class LedgerError(Exception):
     pass
 
 
+def budget_exhausted():
+    """GitHub's hourly REST budget is spent: say when it resets rather than relay the raw error.
+    Asking costs nothing against the budget."""
+    try:
+        core = json.loads(subprocess.run(["gh", "api", "rate_limit"], capture_output=True, text=True,
+                                         timeout=10).stdout)["resources"]["core"]
+        return f"GitHub API budget exhausted, resets at {time.strftime('%H:%M', time.localtime(core['reset']))}"
+    except Exception:
+        return "GitHub API budget exhausted"
+
+
 def canonical_status(name):
     for s in STATUSES:
         if s.lower() == name.strip().lower():
@@ -222,9 +233,11 @@ class LocalBackend:
 
 # ── GitHub Projects v2 backend ───────────────────────────────────────────────────────────────
 # Reads and board writes go over REST: GraphQL has its own points bucket, observed pinned for
-# hours under concurrent agent load while REST on the same token kept working. Reads share a
-# 60-second per-user cache, so the per-turn hook and a commit gate cost one API call per minute
-# rather than one each, which avoids GitHub's secondary rate limit.
+# hours under concurrent agent load while REST on the same token kept working. Reads come from
+# two 60-second per-user caches, the board and the repository's issue listing, so hooks, commit
+# gates and the roadmap pane cost a few calls per minute between them rather than a few each:
+# 2026-10-10 a call per milestone exit, made after every ledger command, spent the hourly
+# 5,000-call budget.
 
 class GitHubBackend:
     API = ["-H", "X-GitHub-Api-Version: 2022-11-28"]
@@ -237,7 +250,7 @@ class GitHubBackend:
         self.kind = config.get("owner_type", "users")
         self.base = f"/{self.kind}/{self.owner}/projectsV2/{self.number}"
         self.cache = private_dir() / f"github-{self.owner}-{self.number}.json"
-        self.closed_cache = private_dir() / f"closed-{self.owner}-{self.number}.json"
+        self.listing_cache = private_dir() / f"issues-{self.owner}-{self.number}.json"
 
     def _gh(self, *args, timeout=20):
         # Its own process group, killed whole on timeout: subprocess.run kills only gh and then
@@ -251,6 +264,8 @@ class GitHubBackend:
             proc.communicate()
             raise
         if proc.returncode != 0:
+            if "API rate limit exceeded" in err:
+                raise LedgerError(budget_exhausted())
             raise LedgerError(f"gh {' '.join(args[:3])}: {err.strip() or out.strip()}")
         return out
 
@@ -345,6 +360,7 @@ class GitHubBackend:
         added = self._api(f"{self.base}/items", "-X", "POST", "-f", "type=Issue", "-F", f"id={db_id}")
         board = self.board(force=True)[0]
         self._set_status(board, added["id"], status)
+        self.listing_cache.unlink(missing_ok=True)
         return n
 
     def _set_status(self, board, item_id, status):
@@ -371,10 +387,16 @@ class GitHubBackend:
         return str(out["data"]["convertProjectV2DraftIssueItemToIssue"]["item"]["content"]["number"])
 
     def move(self, ref, status):
-        board = self.board(force=True)[0]
-        item = self._item(ref, board)
+        # The cached board has the ids a write needs; a card newer than the cache forces a read.
+        board = self.board()[0]
+        try:
+            item = self._item(ref, board)
+        except LedgerError:
+            board = self.board(force=True)[0]
+            item = self._item(ref, board)
         if (item.get("content") or {}).get("number") is None and status == "In progress":
             ref = self._convert_draft(item)
+            self.listing_cache.unlink(missing_ok=True)
         self._set_status(board, item["project_item_id"], status)
         return ref
 
@@ -384,21 +406,39 @@ class GitHubBackend:
     def close(self, ref):
         self.move(ref, "Done")
         self._gh("issue", "close", str(ref).lstrip("#"), "--repo", self.repo)
-        self.closed_cache.unlink(missing_ok=True)
+        self.listing_cache.unlink(missing_ok=True)
+
+    def listing(self):
+        """The repository's milestones and every issue (number, title, state, when closed, milestone
+        number, parent number), cached like the board: one paginated read serves the outline, the
+        unplaced check and the audit, where a call per exit used up the hourly REST budget. Writes
+        that change these fields drop it. Falls back to the last good copy when a refresh fails."""
+        if self.listing_cache.is_file() and time.time() - self.listing_cache.stat().st_mtime < CACHE_SECONDS:
+            return json.loads(self.listing_cache.read_text())
+        try:
+            milestones = [{k: m[k] for k in ("number", "title", "state", "open_issues", "closed_issues", "due_on")}
+                          for m in self._api(f"repos/{self.repo}/milestones?state=all&per_page=100", paginate=True)]
+            issues = [{"ref": str(i["number"]), "title": i["title"], "state": i["state"], "closed_at": i.get("closed_at"),
+                       "milestone": (i.get("milestone") or {}).get("number"),
+                       "parent": i["parent_issue_url"].rsplit("/", 1)[-1] if i.get("parent_issue_url") else None}
+                      for i in self._api(f"repos/{self.repo}/issues?state=all&per_page=100", paginate=True)
+                      if "pull_request" not in i]
+        except (LedgerError, subprocess.TimeoutExpired, ValueError):
+            if self.listing_cache.is_file():
+                return json.loads(self.listing_cache.read_text())
+            raise
+        data = {"milestones": milestones, "issues": issues}
+        tmp = self.listing_cache.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(self.listing_cache)
+        return data
 
     def recently_closed(self):
-        """The last 100 closed issues, however they were closed (a `Closes #n` commit too), with
-        when and whether each is a milestone exit; cached like the board."""
-        if self.closed_cache.is_file() and time.time() - self.closed_cache.stat().st_mtime < CACHE_SECONDS:
-            return json.loads(self.closed_cache.read_text())
-        rows = [{"ref": str(i["number"]), "title": i["title"], "closed_at": i["closed_at"],
-                 "exit": bool(i.get("milestone")) and not i.get("parent_issue_url")}
-                for i in self._api(f"repos/{self.repo}/issues?state=closed&sort=updated&direction=desc&per_page=100")
-                if "pull_request" not in i and i.get("closed_at")]
-        tmp = self.closed_cache.with_suffix(".tmp")
-        tmp.write_text(json.dumps(rows))
-        tmp.replace(self.closed_cache)
-        return rows
+        """Every closed issue, however it was closed (a `Closes #n` commit too), with when and
+        whether it is a milestone exit."""
+        return [{"ref": i["ref"], "title": i["title"], "closed_at": i["closed_at"],
+                 "exit": i["milestone"] is not None and i["parent"] is None}
+                for i in self.listing()["issues"] if i["state"] == "closed" and i["closed_at"]]
 
     def status_of(self, ref):
         """An item's status straight from GitHub, or None when it is not on this project. Measured
@@ -447,16 +487,13 @@ class GitHubBackend:
             return ref
         return self._convert_draft(item)
 
-    def _milestone_rows(self):
-        return self._api(f"repos/{self.repo}/milestones?state=all&per_page=100", paginate=True)
-
     def _milestone_number(self, title):
-        return next(m["number"] for m in self._milestone_rows() if m["title"] == title)
+        return next(m["number"] for m in self.listing()["milestones"] if m["title"] == title)
 
     def milestones(self):
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         rows = []
-        for m in self._milestone_rows():
+        for m in self.listing()["milestones"]:
             due = m.get("due_on")
             if due and m["state"] == "open" and due < now:
                 due = f"overdue since {due[:10]}"
@@ -469,10 +506,12 @@ class GitHubBackend:
     def create_milestone(self, title, description):
         args = ["-X", "POST", "-f", f"title={title}"] + (["-f", f"description={description}"] if description else [])
         self._api(f"repos/{self.repo}/milestones", *args)
+        self.listing_cache.unlink(missing_ok=True)
 
     def set_milestone(self, ref, title):
         n = self._issue_number(ref)
         self._api(f"repos/{self.repo}/issues/{n}", "-X", "PATCH", "-F", f"milestone={self._milestone_number(title)}")
+        self.listing_cache.unlink(missing_ok=True)
         return n
 
     def milestone_of(self, ref):
@@ -480,17 +519,14 @@ class GitHubBackend:
 
     def rename_milestone(self, old, new):
         self._api(f"repos/{self.repo}/milestones/{self._milestone_number(old)}", "-X", "PATCH", "-f", f"title={new}")
+        self.listing_cache.unlink(missing_ok=True)
 
     def unplaced(self, refs):
         """The refs whose items have neither a milestone nor a parent. A draft card can carry
         neither, so it is always unplaced; an issue missing from the open list is skipped."""
-        placed, listed = set(), set()
-        for i in self._api(f"repos/{self.repo}/issues?state=open&per_page=100", paginate=True):
-            if "pull_request" in i:
-                continue
-            listed.add(str(i["number"]))
-            if i.get("milestone") or i.get("parent_issue_url"):
-                placed.add(str(i["number"]))
+        open_issues = [i for i in self.listing()["issues"] if i["state"] == "open"]
+        listed = {i["ref"] for i in open_issues}
+        placed = {i["ref"] for i in open_issues if i["milestone"] is not None or i["parent"]}
         return [r for r in refs if r.startswith("draft:") or (r in listed and r not in placed)]
 
     def _db_id(self, n):
@@ -501,6 +537,7 @@ class GitHubBackend:
         child_id = "<id of " + child + ">" if child.startswith("draft:") else self._db_id(child)
         self._write(dry_run, f"repos/{self.repo}/issues/{parent}/sub_issues", "-X", "POST",
                     "-F", f"sub_issue_id={child_id}", "-F", "replace_parent=true")
+        self.listing_cache.unlink(missing_ok=True)
         return child
 
     def unparent(self, child, dry_run):
@@ -510,6 +547,7 @@ class GitHubBackend:
             raise LedgerError(f"#{child} has no parent")
         self._write(dry_run, f"repos/{self.repo}/issues/{parent}/sub_issue", "-X", "DELETE",
                     "-F", f"sub_issue_id={self._db_id(child)}")
+        self.listing_cache.unlink(missing_ok=True)
         return child
 
     def parent_of(self, ref):
@@ -521,24 +559,20 @@ class GitHubBackend:
             raise
 
     def outline(self, children):
-        rows = self._milestone_rows()
-        if not rows:  # projects without milestones pay one call, not two
-            return []
-        issues = [i for i in self._api(f"repos/{self.repo}/issues?milestone=*&state=all&per_page=100", paginate=True)
-                  if "pull_request" not in i]
-        node = lambda i: {"ref": str(i["number"]), "title": i["title"], "done": i["state"] == "closed"}
+        data = self.listing()
+        kids_of = {}
+        for i in data["issues"]:
+            if i["parent"]:
+                kids_of.setdefault(i["parent"], []).append(i)
+        node = lambda i: {"ref": i["ref"], "title": i["title"], "done": i["state"] == "closed"}
         result = []
-        for m in sorted(rows, key=lambda m: m["number"]):
+        for m in sorted(data["milestones"], key=lambda m: m["number"]):
             exits = []
-            for i in issues:
-                if (i.get("milestone") or {}).get("number") == m["number"] and not i.get("parent_issue_url"):
-                    summary = i.get("sub_issues_summary") or {}
-                    kids = []
-                    if children and summary.get("total"):
-                        kids = [node(k) for k in self._api(f"repos/{self.repo}/issues/{i['number']}/sub_issues?per_page=100",
-                                                           paginate=True)]
-                    exits.append({**node(i), "child_done": summary.get("completed", 0),
-                                  "child_total": summary.get("total", 0), "children": kids if children else None})
+            for i in data["issues"]:
+                if i["milestone"] == m["number"] and not i["parent"]:
+                    kids = sorted(kids_of.get(i["ref"], []), key=lambda k: int(k["ref"]))
+                    exits.append({**node(i), "child_done": sum(k["state"] == "closed" for k in kids),
+                                  "child_total": len(kids), "children": [node(k) for k in kids] if children else None})
             exits.sort(key=lambda e: int(e["ref"]))
             result.append({"title": m["title"], "state": m["state"], "exits": exits})
         return result
